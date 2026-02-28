@@ -1,8 +1,15 @@
 node_modules
-.env
-.env.local
+.env*
 __pycache__
+**/__pycache__/
 *.pyc
 venv
 .DS_Store
 *.db
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+CLAUDE.md
+.claude
