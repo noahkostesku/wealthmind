@@ -1,0 +1,55 @@
+{
+  "tax_year": 2024,
+  "tfsa": {
+    "annual_limit_2024": 7000,
+    "annual_limit_2025": 7000,
+    "cumulative_room_if_eligible_since_2009": 102000,
+    "note": "Withdrawn amounts restored as contribution room the following calendar year"
+  },
+  "rrsp": {
+    "contribution_limit_rate": 0.18,
+    "max_contribution_2024": 31560,
+    "max_contribution_2025": 32490,
+    "deadline_for_2024_tax_year": "2025-03-03",
+    "note": "Contributions reduce taxable income in the year claimed"
+  },
+  "fhsa": {
+    "annual_limit": 8000,
+    "lifetime_limit": 40000,
+    "eligible_if": "Canadian resident, 18+, has not owned a qualifying home in current year or preceding 4 years",
+    "tax_treatment": "Contributions tax deductible like RRSP, withdrawals tax free like TFSA for qualifying home purchase",
+    "carry_forward": "Unused room carries forward up to $8000 maximum in a single year"
+  },
+  "capital_gains": {
+    "inclusion_rate_under_250k": 0.50,
+    "inclusion_rate_over_250k": 0.667,
+    "threshold": 250000,
+    "note": "Gains in registered accounts (TFSA, RRSP, FHSA) are fully sheltered"
+  },
+  "federal_brackets_2024": [
+    { "min": 0, "max": 55867, "rate": 0.15 },
+    { "min": 55867, "max": 111733, "rate": 0.205 },
+    { "min": 111733, "max": 154906, "rate": 0.26 },
+    { "min": 154906, "max": 220000, "rate": 0.29 },
+    { "min": 220000, "max": null, "rate": 0.33 }
+  ],
+  "ontario_brackets_2024": [
+    { "min": 0, "max": 51446, "rate": 0.0505 },
+    { "min": 51446, "max": 102894, "rate": 0.0915 },
+    { "min": 102894, "max": 150000, "rate": 0.1116 },
+    { "min": 150000, "max": 220000, "rate": 0.1216 },
+    { "min": 220000, "max": null, "rate": 0.1316 }
+  ],
+  "wealthsimple_specific": {
+    "client_tiers": {
+      "core": { "max_assets": 100000, "management_fee": 0.005 },
+      "premium": { "min_assets": 100000, "max_assets": 500000, "management_fee": 0.004 },
+      "generation": { "min_assets": 500000, "management_fee_range": "0.002-0.004" }
+    },
+    "managed_portfolios": ["Classic", "Growth", "Socially Responsible", "Income", "Direct Indexing", "Summit"],
+    "chequing_interest_rate": 0.025,
+    "margin_note": "Margin is only available in self-directed non-registered accounts",
+    "tax_loss_harvesting_note": "Only relevant in self-directed non-registered accounts. Managed accounts handle this automatically via Wealthsimple Direct Indexing.",
+    "fhsa_note": "Wealthsimple is one of Canada's largest FHSA providers — opening one is a 2-minute in-app flow"
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "client": {
+    "age": 31,
+    "province": "ON",
+    "annual_income": 95000,
+    "filing_status": "married",
+    "wealthsimple_tier": "Premium",
+    "total_assets_with_ws": 142000,
+    "member_since": "2019"
+  },
+  "accounts": {
+    "chequing": {
+      "type": "wealthsimple_chequing",
+      "balance": 18400,
+      "interest_rate": 0.025,
+      "product_name": "Wealthsimple Chequing"
+    },
+    "tfsa_managed": {
+      "type": "tfsa",
+      "subtype": "managed",
+      "portfolio": "Classic Growth",
+      "balance": 22000,
+      "contribution_room_remaining": 7000,
+      "annual_limit_2024": 7000,
+      "cumulative_room_if_eligible_since_2009": 102000,
+      "product_name": "Wealthsimple Managed TFSA"
+    },
+    "rrsp_self_directed": {
+      "type": "rrsp",
+      "subtype": "self_directed",
+      "balance": 41000,
+      "contribution_room_remaining": 14500,
+      "contribution_deadline": "2025-03-03",
+      "product_name": "Wealthsimple Self-Directed RRSP",
+      "positions": [
+        { "ticker": "XEQT.TO", "shares": 320, "avg_cost": 29.10, "current_price": 31.40, "unrealized_gain": 736 }
+      ]
+    },
+    "non_registered_self_directed": {
+      "type": "non_registered",
+      "subtype": "self_directed",
+      "product_name": "Wealthsimple Self-Directed Non-Registered",
+      "balance_cash": 1200,
+      "positions": [
+        { "ticker": "SHOP.TO", "shares": 12, "avg_cost": 82.50, "current_price": 118.20, "unrealized_gain": 428.40, "held_days": 280 },
+        { "ticker": "CNQ.TO", "shares": 45, "avg_cost": 52.30, "current_price": 44.80, "unrealized_loss": -337.50, "held_days": 190 },
+        { "ticker": "VEQT.TO", "shares": 85, "avg_cost": 41.10, "current_price": 44.30, "unrealized_gain": 272.00, "held_days": 410 }
+      ]
+    },
+    "fhsa": {
+      "type": "fhsa",
+      "exists": false,
+      "eligible": true,
+      "annual_contribution_limit": 8000,
+      "lifetime_limit": 40000,
+      "note": "Client has not opened FHSA — not yet a homeowner"
+    },
+    "margin": {
+      "type": "margin",
+      "debit_balance": 11200,
+      "interest_rate": 0.062,
+      "product_name": "Wealthsimple Margin"
+    },
+    "crypto": {
+      "type": "crypto",
+      "product_name": "Wealthsimple Crypto",
+      "balance_cad": 3200,
+      "positions": [
+        { "asset": "BTC", "balance_cad": 2100, "unrealized_gain_cad": 340 },
+        { "asset": "ETH", "balance_cad": 1100, "unrealized_loss_cad": -85 }
+      ]
+    }
+  },
+  "tax_profile": {
+    "federal_bracket": "20.5%",
+    "provincial_bracket_on": "9.15%",
+    "marginal_rate_combined": "29.65%",
+    "capital_gains_inclusion_rate": 0.50,
+    "rrsp_deduction_value_per_dollar": 0.2965
+  }
+}
