@@ -8,9 +8,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database import AnalysisRun, Insight, get_db
-from backend.graph.graph import compile_graph
-from backend.graph.state import GraphState
+from database import AnalysisRun, Insight, get_db
+from graph.graph import compile_graph
+from graph.state import GraphState
 
 router = APIRouter()
 

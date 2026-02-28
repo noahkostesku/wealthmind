@@ -7,14 +7,14 @@ from pathlib import Path
 # Allow running from repo root: python -m backend.test_agents
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.graph.agents import (
+from graph.agents import (
     allocation_agent,
     rate_arbitrage_agent,
     tax_implications_agent,
     timing_agent,
     tlh_agent,
 )
-from backend.graph.state import GraphState
+from graph.state import GraphState
 
 DATA_DIR = Path(__file__).parent / "data"
 

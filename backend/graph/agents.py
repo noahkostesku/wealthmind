@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from backend.graph.state import GraphState
+from graph.state import GraphState
 
 # Load .env relative to this file's location (backend/.env)
 load_dotenv(Path(__file__).parent.parent / ".env")

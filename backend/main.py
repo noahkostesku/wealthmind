@@ -12,8 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend.api.routes import router
-from backend.database import create_tables
+from api.routes import router
+from database import create_tables
 
 load_dotenv()
 

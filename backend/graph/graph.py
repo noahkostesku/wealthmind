@@ -3,14 +3,14 @@ import logging
 
 from langgraph.graph import END, START, StateGraph
 
-from backend.graph.agents import (
+from graph.agents import (
     allocation_agent,
     rate_arbitrage_agent,
     tax_implications_agent,
     timing_agent,
     tlh_agent,
 )
-from backend.graph.state import GraphState
+from graph.state import GraphState
 
 logger = logging.getLogger(__name__)
 
