@@ -33,7 +33,7 @@
       "contribution_deadline": "2025-03-03",
       "product_name": "Wealthsimple Self-Directed RRSP",
       "positions": [
-        { "ticker": "XEQT.TO", "shares": 320, "avg_cost": 29.10, "current_price": 31.40, "unrealized_gain": 736 }
+        { "ticker": "XEQT.TO", "shares": 320, "avg_cost": 37.84, "current_price": 42.04, "unrealized_gain": 1344 }
       ]
     },
     "non_registered_self_directed": {
@@ -42,9 +42,9 @@
       "product_name": "Wealthsimple Self-Directed Non-Registered",
       "balance_cash": 1200,
       "positions": [
-        { "ticker": "SHOP.TO", "shares": 12, "avg_cost": 82.50, "current_price": 118.20, "unrealized_gain": 428.40, "held_days": 280 },
-        { "ticker": "CNQ.TO", "shares": 45, "avg_cost": 52.30, "current_price": 44.80, "unrealized_loss": -337.50, "held_days": 190 },
-        { "ticker": "VEQT.TO", "shares": 85, "avg_cost": 41.10, "current_price": 44.30, "unrealized_gain": 272.00, "held_days": 410 }
+        { "ticker": "SHOP.TO", "shares": 12, "avg_cost": 82.50, "current_price": 164.67, "unrealized_gain": 986.04, "held_days": 280 },
+        { "ticker": "CNQ.TO", "shares": 45, "avg_cost": 70.41, "current_price": 59.67, "unrealized_loss": -483.30, "held_days": 190 },
+        { "ticker": "VEQT.TO", "shares": 85, "avg_cost": 67.85, "current_price": 56.54, "unrealized_loss": -961.35, "held_days": 410 }
       ]
     },
     "fhsa": {
@@ -66,8 +66,8 @@
       "product_name": "Wealthsimple Crypto",
       "balance_cad": 3200,
       "positions": [
-        { "asset": "BTC", "balance_cad": 2100, "unrealized_gain_cad": 340 },
-        { "asset": "ETH", "balance_cad": 1100, "unrealized_loss_cad": -85 }
+        { "asset": "BTC", "balance_cad": 1368, "avg_cost_cad": 104841.91, "unrealized_loss_cad": -205 },
+        { "asset": "ETH", "balance_cad": 722, "avg_cost_cad": 3342.53, "unrealized_loss_cad": -181 }
       ]
     }
   },

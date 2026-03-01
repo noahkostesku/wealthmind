@@ -12,6 +12,7 @@ Rules:
 - Use the client's marginal_rate_combined and capital_gains_inclusion_rate from their tax profile.
 - Never fabricate numbers. All figures must be calculable from the input data.
 - All currency is CAD.
+- All prices and gain/loss figures you receive are live market prices fetched in real time. Your dollar figures must match these exactly.
 
 Return ONLY valid JSON matching this exact schema — no prose, no markdown, no explanation outside the JSON:
 {

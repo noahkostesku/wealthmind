@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -94,6 +95,115 @@ async def synthesize_response(
     except Exception as exc:
         logger.error("Response synthesizer failed: %s", exc)
         return "I encountered an issue analysing your request. Please try again."
+
+
+_AGENT_DESCRIPTIONS: dict[str, str] = {
+    "allocation": "TFSA/RRSP/FHSA contribution room, cash placement, registered account gaps",
+    "tax_implications": "tax consequences of trades, capital gains, selling decisions",
+    "tlh": "tax-loss harvesting, unrealized losses, superficial loss rule",
+    "rate_arbitrage": "margin interest vs cash rate, capital inefficiencies",
+    "timing": "RRSP deadline, tax-year end, time-sensitive opportunities",
+}
+
+# After any source agent runs, evaluate these candidate agents
+CROSS_REFERRAL_MAP: dict[str, list[str]] = {
+    "allocation": ["timing", "rate_arbitrage"],
+    "tax_implications": ["tlh", "timing"],
+    "tlh": ["tax_implications", "timing"],
+    "rate_arbitrage": ["allocation"],
+    "timing": ["allocation", "tax_implications"],
+    "direct_response": ["allocation", "tax_implications", "tlh", "rate_arbitrage", "timing"],
+}
+
+_CROSS_REFERRAL_CHECK_PROMPT = (
+    "Given the user's question, the agent findings shown, and the response already given, "
+    "would invoking the {agent} agent ({description}) add meaningful NEW value for the user right now? "
+    "Only say yes if there is a clear, specific connection — not on general principle. "
+    "If findings are empty or the question is a greeting/small-talk, always say no.\n\n"
+    "Return ONLY valid JSON: {{\"refer\": true/false, \"reason\": \"one sentence\"}}"
+)
+
+
+async def evaluate_cross_referral(
+    candidate_agent: str,
+    response_text: str,
+    findings: dict,
+    user_message: str,
+) -> dict:
+    """
+    Check if a specific agent would add meaningful new value given the current response.
+    Returns { "refer": bool, "reason": str }
+    """
+    description = _AGENT_DESCRIPTIONS.get(candidate_agent, candidate_agent)
+    prompt = _CROSS_REFERRAL_CHECK_PROMPT.format(
+        agent=candidate_agent,
+        description=description,
+    )
+    user_content = json.dumps(
+        {
+            "user_message": user_message,
+            "response": response_text,
+            "agent_findings": findings,
+        },
+        indent=2,
+    )
+    llm = ChatAnthropic(model=_MODEL, max_tokens=128)
+    try:
+        resp = await llm.ainvoke(
+            [
+                SystemMessage(content=prompt),
+                HumanMessage(content=user_content),
+            ]
+        )
+        raw = resp.content.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw.strip())
+        if isinstance(result, dict) and "refer" in result:
+            return result
+        return {"refer": False, "reason": ""}
+    except Exception as exc:
+        logger.error("Cross-referral check for %s failed: %s", candidate_agent, exc)
+        return {"refer": False, "reason": ""}
+
+
+async def get_cross_referral_candidates(
+    primary_agents: list[str],
+    response_text: str,
+    findings: dict,
+    user_message: str,
+    turn_agents_invoked: set[str],
+    max_referrals: int = 2,
+) -> list[dict]:
+    """
+    Evaluate all cross-referral candidates for agents run this turn.
+    Returns up to max_referrals dicts: { "agent": str, "reason": str }.
+    Skips any agent already in turn_agents_invoked.
+    """
+    candidates: set[str] = set()
+    for agent in primary_agents:
+        for candidate in CROSS_REFERRAL_MAP.get(agent, []):
+            if candidate not in turn_agents_invoked:
+                candidates.add(candidate)
+
+    if not candidates:
+        return []
+
+    eval_results = await asyncio.gather(
+        *[
+            evaluate_cross_referral(c, response_text, findings, user_message)
+            for c in candidates
+        ]
+    )
+
+    referrals = [
+        {"agent": candidate, "reason": result.get("reason", "")}
+        for candidate, result in zip(candidates, eval_results)
+        if result.get("refer")
+    ]
+    return referrals[:max_referrals]
 
 
 async def generate_follow_up_chips(

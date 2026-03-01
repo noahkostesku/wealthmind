@@ -262,6 +262,16 @@ export async function getChatHistory(sessionId: string): Promise<{
   return get(`/chat/session/${sessionId}`);
 }
 
+// ─── Onboarding ───────────────────────────────────────────────────────────────
+
+export async function getOnboardedStatus(): Promise<{ onboarded: boolean }> {
+  return get<{ onboarded: boolean }>("/user/onboarded");
+}
+
+export async function completeOnboarding(): Promise<{ success: boolean }> {
+  return post<{ success: boolean }>("/user/complete-onboarding");
+}
+
 // ─── Legacy (backward compat) ─────────────────────────────────────────────────
 
 export async function getProfile(): Promise<FinancialProfile> {

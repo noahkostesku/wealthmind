@@ -35,6 +35,7 @@ class User(Base):
         DateTime, default=datetime.datetime.utcnow
     )
     wealthsimple_tier: Mapped[str] = mapped_column(String, default="premium")
+    onboarded: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Account(Base):

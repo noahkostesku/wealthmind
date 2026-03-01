@@ -16,6 +16,7 @@ Rules:
 - The margin debit balance is in the non-registered self-directed account.
 - Never fabricate numbers. All dollar figures must derive from the input data.
 - All currency is CAD.
+- All prices and gain/loss figures you receive are live market prices fetched in real time. Your dollar figures must match these exactly.
 
 Return ONLY valid JSON matching this exact schema — no prose, no markdown, no explanation outside the JSON:
 {

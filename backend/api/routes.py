@@ -2,8 +2,11 @@ import asyncio
 import copy
 import datetime
 import json
+import logging
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -11,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from database import Account, AsyncSessionLocal, Conversation, Position, Transaction, get_db
+from database import Account, AsyncSessionLocal, Conversation, Position, Transaction, User, get_db
 from graph.agents import (
     allocation_agent,
     rate_arbitrage_agent,
@@ -23,7 +26,7 @@ from graph.graph import compile_graph
 from graph.proactive import generate_proactive_greeting
 from graph.router import conversation_router
 from graph.state import GraphState
-from graph.synthesizer import generate_follow_up_chips, synthesize_response
+from graph.synthesizer import generate_follow_up_chips, get_cross_referral_candidates, synthesize_response
 from services.portfolio import calculate_tax_exposure, get_portfolio_snapshot, get_position_history
 from services.prices import get_current_price, get_price_history, get_usdcad_rate, search_stocks
 from services.trading import (
@@ -43,6 +46,26 @@ _DEMO_USER_ID = 1
 
 def _load_cra_rules() -> dict:
     return json.loads((_DATA_DIR / "cra_rules_2024.json").read_text())
+
+
+# ===========================================================================
+# ONBOARDING ROUTES
+# ===========================================================================
+
+@router.get("/user/onboarded")
+async def get_onboarded(db: AsyncSession = Depends(get_db)):
+    # DEV MODE: always return false so onboarding shows on every load
+    return {"onboarded": False}
+
+
+@router.post("/user/complete-onboarding")
+async def complete_onboarding(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.id == _DEMO_USER_ID))
+    user = result.scalar_one_or_none()
+    if user:
+        user.onboarded = True
+        await db.commit()
+    return {"success": True}
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +461,38 @@ _AGENT_HANDOFF_MESSAGES = {
     "timing": "Checking for time-sensitive deadlines...",
 }
 
+# Auto-referral handoff messages keyed by (source_agent, referred_agent)
+_AUTO_REFERRAL_HANDOFF: dict[str, dict[str, str]] = {
+    "allocation": {
+        "rate_arbitrage": "Your cash position affects your rate picture too — checking that...",
+        "timing": "Let me check if any deadlines apply to this...",
+    },
+    "tax_implications": {
+        "tlh": "There may be losses worth harvesting against this — looking now...",
+        "timing": "Checking if there are any time-sensitive considerations here...",
+    },
+    "tlh": {
+        "timing": "Let me check the timing angle on this harvest...",
+        "tax_implications": "Reviewing the full tax picture on this...",
+    },
+    "rate_arbitrage": {
+        "allocation": "This changes your allocation calculus — checking contribution room...",
+    },
+    "timing": {
+        "allocation": "Your cash position matters here — reviewing allocation...",
+        "tax_implications": "Checking the tax angle on this timing...",
+    },
+}
+_AUTO_REFERRAL_DEFAULT_HANDOFF = "Let me see if any agents can add to this..."
+
+
+def _get_auto_referral_message(source_agents: list[str], target_agent: str) -> str:
+    for src in source_agents:
+        msg = _AUTO_REFERRAL_HANDOFF.get(src, {}).get(target_agent)
+        if msg:
+            return msg
+    return _AUTO_REFERRAL_DEFAULT_HANDOFF
+
 
 def _make_chat_state(portfolio: dict, cra_rules: dict, run_id: str) -> GraphState:
     return {
@@ -582,7 +637,14 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
     cra_rules = _load_cra_rules()
 
     async def generate():
+        # Chain-protection state — tracks every agent invoked this turn
+        turn_agents_invoked: set[str] = set()
+        auto_referral_count = 0
+        MAX_AUTO_REFERRALS = 2
+
         try:
+            run_id = f"chat-{body.session_id}"
+
             # ── 1. Route ──────────────────────────────────────────────────
             routing = await conversation_router(body.message, history, last_findings)
             agents_to_invoke = routing.get("agents_to_invoke") or []
@@ -602,14 +664,52 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
             if routing.get("can_answer_from_context") or not agents_to_invoke:
                 direct = routing.get("direct_response") or ""
                 yield {"event": "response", "data": json.dumps({"text": direct})}
-                chips = await generate_follow_up_chips(body.message, direct, last_findings)
+                turn_agents_invoked.add("direct_response")
+
+                all_findings = dict(last_findings)
+                final_response = direct
+                referral_agents_run: list[str] = []
+
+                # Universal cross-referral check — runs after every response
+                referrals = await get_cross_referral_candidates(
+                    ["direct_response"], direct, all_findings,
+                    body.message, turn_agents_invoked, MAX_AUTO_REFERRALS,
+                )
+                for referral in referrals:
+                    if auto_referral_count >= MAX_AUTO_REFERRALS:
+                        break
+                    ref_agent = referral["agent"]
+                    if ref_agent in turn_agents_invoked:
+                        continue
+                    handoff_msg = _get_auto_referral_message(["direct_response"], ref_agent)
+                    yield {"event": "handoff", "data": json.dumps({"agent": ref_agent, "message": handoff_msg})}
+                    yield {"event": "agent_start", "data": json.dumps({"agent": ref_agent})}
+                    try:
+                        ref_result = await _CHAT_AGENT_MAP[ref_agent](_make_chat_state(portfolio, cra_rules, run_id))
+                        ref_findings = ref_result.get("domain_findings", {})
+                        domain_key = _AGENT_TO_DOMAIN_KEY.get(ref_agent, ref_agent)
+                        finding_count = len(ref_findings.get(domain_key, []))
+                        yield {"event": "agent_complete", "data": json.dumps({"agent": ref_agent, "finding_count": finding_count})}
+                        all_findings.update(ref_findings)
+                        turn_agents_invoked.add(ref_agent)
+                        referral_agents_run.append(ref_agent)
+                        auto_referral_count += 1
+                        followup_text = await synthesize_response(body.message, ref_findings, history)
+                        final_response = followup_text
+                        yield {"event": "auto_referral_response", "data": json.dumps({"agent": ref_agent, "text": followup_text})}
+                    except Exception as exc:
+                        logger.error("Auto-referral agent %s failed: %s", ref_agent, exc)
+                        yield {"event": "agent_complete", "data": json.dumps({"agent": ref_agent, "finding_count": 0, "error": str(exc)})}
+
+                chips = await generate_follow_up_chips(body.message, final_response, all_findings)
                 yield {"event": "follow_ups", "data": json.dumps({"chips": chips})}
                 yield {"event": "done", "data": json.dumps({"session_id": body.session_id})}
-                await _save_chat_exchange(conv_id, body.message, direct, [], last_findings)
+                await _save_chat_exchange(conv_id, body.message, final_response, referral_agents_run, all_findings)
                 return
 
             # ── 3. Agent start + handoff events ─────────────────────────
             valid_agents = [d for d in agents_to_invoke if d in _CHAT_AGENT_MAP]
+            turn_agents_invoked.update(valid_agents)
             for domain in valid_agents:
                 yield {"event": "agent_start", "data": json.dumps({"agent": domain})}
                 yield {
@@ -623,7 +723,6 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                 }
 
             # ── 4. Run selected agents in parallel ────────────────────────
-            run_id = f"chat-{body.session_id}"
             agent_results = await asyncio.gather(
                 *[
                     _CHAT_AGENT_MAP[domain](_make_chat_state(portfolio, cra_rules, run_id))
@@ -649,18 +748,49 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                         "data": json.dumps({"agent": domain, "finding_count": count}),
                     }
 
-            # ── 5. Synthesise response ────────────────────────────────────
+            # ── 5. Synthesise primary response ────────────────────────────
             response_text = await synthesize_response(body.message, domain_findings, history)
             yield {"event": "response", "data": json.dumps({"text": response_text})}
 
-            # ── 6. Follow-up chips ────────────────────────────────────────
-            chips = await generate_follow_up_chips(body.message, response_text, domain_findings)
+            # ── 6. Universal cross-referral — runs after every agent response ──
+            all_findings = dict(domain_findings)
+            final_response = response_text
+
+            referrals = await get_cross_referral_candidates(
+                valid_agents, response_text, domain_findings,
+                body.message, turn_agents_invoked, MAX_AUTO_REFERRALS,
+            )
+            for referral in referrals:
+                if auto_referral_count >= MAX_AUTO_REFERRALS:
+                    break
+                ref_agent = referral["agent"]
+                if ref_agent in turn_agents_invoked:
+                    continue
+                handoff_msg = _get_auto_referral_message(valid_agents, ref_agent)
+                yield {"event": "handoff", "data": json.dumps({"agent": ref_agent, "message": handoff_msg})}
+                yield {"event": "agent_start", "data": json.dumps({"agent": ref_agent})}
+                try:
+                    ref_result = await _CHAT_AGENT_MAP[ref_agent](_make_chat_state(portfolio, cra_rules, run_id))
+                    ref_findings = ref_result.get("domain_findings", {})
+                    domain_key = _AGENT_TO_DOMAIN_KEY.get(ref_agent, ref_agent)
+                    finding_count = len(ref_findings.get(domain_key, []))
+                    yield {"event": "agent_complete", "data": json.dumps({"agent": ref_agent, "finding_count": finding_count})}
+                    all_findings.update(ref_findings)
+                    turn_agents_invoked.add(ref_agent)
+                    auto_referral_count += 1
+                    followup_text = await synthesize_response(body.message, ref_findings, history)
+                    final_response = followup_text
+                    yield {"event": "auto_referral_response", "data": json.dumps({"agent": ref_agent, "text": followup_text})}
+                except Exception as exc:
+                    logger.error("Auto-referral agent %s failed: %s", ref_agent, exc)
+                    yield {"event": "agent_complete", "data": json.dumps({"agent": ref_agent, "finding_count": 0, "error": str(exc)})}
+
+            # ── 7. Follow-up chips + save ────────────────────────────────
+            chips = await generate_follow_up_chips(body.message, final_response, all_findings)
             yield {"event": "follow_ups", "data": json.dumps({"chips": chips})}
 
-            # ── 7. Save & done ────────────────────────────────────────────
-            await _save_chat_exchange(
-                conv_id, body.message, response_text, valid_agents, domain_findings
-            )
+            saved_sources = [a for a in turn_agents_invoked if a != "direct_response"]
+            await _save_chat_exchange(conv_id, body.message, final_response, saved_sources, all_findings)
             yield {"event": "done", "data": json.dumps({"session_id": body.session_id})}
 
         except Exception as exc:
