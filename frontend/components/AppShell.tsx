@@ -10,8 +10,12 @@ import { IntroScreen } from "./onboarding/IntroScreen";
 import { WellyIntro } from "./onboarding/WellyIntro";
 import type { WellyMessage } from "./onboarding/WellyIntro";
 import { PortfolioProvider } from "@/contexts/PortfolioContext";
-import { getOnboardedStatus, completeOnboarding } from "@/lib/api";
+import { getOnboardedStatus, completeOnboarding, getMonitorAlerts } from "@/lib/api";
+import type { MonitorAlertData } from "@/types";
 import type { ReactNode } from "react";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const MONITOR_USER_ID = "1";
 
 const PUBLIC_PATHS = ["/login", "/"];
 const LS_KEY = "wm_onboarded";
@@ -33,6 +37,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [onboardingMessages, setOnboardingMessages] = useState<WellyMessage[]>([]);
   const [onboardingChips, setOnboardingChips] = useState<string[]>([]);
   const checkedRef = useRef(false);
+
+  // Monitor alert state
+  const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlertData[]>([]);
+  const [unreadAlertCount, setUnreadAlertCount] = useState(0);
+  const wsRef = useRef<WebSocket | null>(null);
 
   const isPublic = PUBLIC_PATHS.includes(pathname);
   const isAuthenticated = !isPublic && status !== "loading" && !!session;
@@ -59,6 +68,67 @@ export function AppShell({ children }: { children: ReactNode }) {
         setPhase("done"); // fail-safe: skip onboarding
       });
   }, [isAuthenticated]);
+
+  // ── Monitor alerts: fetch on mount + WebSocket for real-time ─────────────
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    // Fetch any pending alerts from the backend
+    getMonitorAlerts()
+      .then((alerts) => {
+        if (alerts.length > 0) {
+          setMonitorAlerts(alerts);
+          // Count only unsurfaced alerts as "unread" — all fetched ones count
+          setUnreadAlertCount(alerts.length);
+        }
+      })
+      .catch(() => null);
+
+    // Open WebSocket for real-time alerts
+    const wsUrl = API_URL.replace(/^http/, "ws") + `/ws/monitor/${MONITOR_USER_ID}`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data as string) as Record<string, unknown>;
+        if (data.type === "monitor_alert") {
+          const alert: MonitorAlertData = {
+            id: data.id as number,
+            alert_type: data.alert_type as string,
+            message: data.message as string,
+            ticker: (data.ticker as string | null | undefined) ?? null,
+            dollar_impact: (data.dollar_impact as number | null | undefined) ?? null,
+            created_at: data.created_at as string,
+          };
+          setMonitorAlerts((prev) => {
+            // Avoid duplicates
+            if (prev.some((a) => a.id === alert.id)) return prev;
+            return [...prev, alert];
+          });
+          // Increment unread badge when panel is closed
+          if (!wellyOpen) {
+            setUnreadAlertCount((n) => n + 1);
+          }
+        }
+      } catch {
+        // ignore malformed messages
+      }
+    };
+
+    ws.onerror = () => null;
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
+  // Clear unread count when Welly panel opens
+  useEffect(() => {
+    if (wellyOpen) setUnreadAlertCount(0);
+  }, [wellyOpen]);
 
   // ── IntroScreen dismissed ─────────────────────────────────────────────────
   const handleIntroDismiss = useCallback(async (skipped: boolean) => {
@@ -139,6 +209,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             onboardingMessages={onboardingMessages.length > 0 ? onboardingMessages : undefined}
             onboardingChips={onboardingChips.length > 0 ? onboardingChips : undefined}
             onboardingInProgress={onboardingInProgress}
+            monitorAlerts={monitorAlerts.length > 0 ? monitorAlerts : undefined}
+            unreadAlertCount={unreadAlertCount}
           />
         </div>
 
@@ -146,10 +218,15 @@ export function AppShell({ children }: { children: ReactNode }) {
         {!wellyOpen && (
           <button
             onClick={() => setWellyOpen(true)}
-            className="fixed bottom-20 lg:bottom-6 right-4 z-50 w-12 h-12 bg-[#111827] text-white rounded-full shadow-lg flex items-center justify-center hover:bg-zinc-700 transition-colors"
+            className="fixed bottom-20 lg:bottom-6 right-4 z-50 w-12 h-12 bg-[#111827] text-white rounded-full shadow-lg flex items-center justify-center hover:bg-zinc-700 transition-colors relative"
             title="Open Welly"
           >
             <BotMessageSquare className="w-5 h-5" />
+            {unreadAlertCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-white text-[10px] font-bold flex items-center justify-center leading-none ring-2 ring-white">
+                {unreadAlertCount > 9 ? "9+" : unreadAlertCount}
+              </span>
+            )}
           </button>
         )}
 

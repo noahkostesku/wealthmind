@@ -127,6 +127,7 @@ async def execute_buy(
     )
     db.add(txn)
     await db.commit()
+    await db.refresh(acct)
     await db.refresh(pos)
     await db.refresh(txn)
 
@@ -209,6 +210,7 @@ async def execute_sell(
     )
     db.add(txn)
     await db.commit()
+    await db.refresh(acct)
     await db.refresh(txn)
 
     return {

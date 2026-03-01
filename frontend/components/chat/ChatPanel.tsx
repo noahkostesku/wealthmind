@@ -8,11 +8,12 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { Send, BotMessageSquare, X, Check } from "lucide-react";
-import { createChatSession, streamChatMessage } from "@/lib/api";
-import type { ChatSession } from "@/types";
+import { Send, BotMessageSquare, X, Check, Bell } from "lucide-react";
+import { createChatSession, streamChatMessage, dismissMonitorAlert, getAdvisorReport } from "@/lib/api";
+import type { ChatSession, MonitorAlertData } from "@/types";
 import { AGENT_CAPABILITIES } from "@/components/onboarding/WellyIntro";
 import type { WellyMessage } from "@/components/onboarding/WellyIntro";
+import { MonitorAlertBubble } from "./MonitorAlert";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ interface ReferralSuggestion {
 interface UIMessage {
   id: string;
   role: "user" | "assistant";
+  type?: "orb";
   content: string;
   streaming?: boolean;
   agent_sources?: string[];
@@ -34,6 +36,14 @@ interface UIMessage {
   isCapabilityList?: boolean;
   /** cross-agent referral suggestion from synthesizer */
   referral_suggestion?: ReferralSuggestion;
+  /** monitor alert payload — renders MonitorAlertBubble */
+  monitorAlert?: MonitorAlertData;
+  /** advisor do-not-do — amber left border + "Worth noting" label */
+  isAdvisorDoNotDo?: boolean;
+  // orb-specific fields (used when type === "orb")
+  agent?: string;
+  orbStatus?: "running" | "complete";
+  fading?: boolean;
 }
 
 interface AgentCard {
@@ -192,9 +202,10 @@ interface MessageBubbleProps {
   msg: UIMessage;
   onChip: (text: string) => void;
   onReferral: (agent: string) => void;
+  onDismissAlert: (alertId: number) => void;
 }
 
-function MessageBubble({ msg, onChip, onReferral }: MessageBubbleProps) {
+function MessageBubble({ msg, onChip, onReferral, onDismissAlert }: MessageBubbleProps) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
@@ -202,6 +213,45 @@ function MessageBubble({ msg, onChip, onReferral }: MessageBubbleProps) {
           {msg.content}
         </div>
       </div>
+    );
+  }
+
+  // Agent orb — inline pulse pill in the message stream
+  if (msg.type === "orb") {
+    const isRunning = msg.orbStatus === "running";
+    const agentLabel = AGENT_LABELS[msg.agent ?? ""] ?? msg.agent ?? "";
+    return (
+      <div
+        className={`transition-opacity duration-300 ${
+          msg.fading ? "opacity-0" : "opacity-100"
+        }`}
+      >
+        <div className="rounded-full inline-flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 shadow-sm">
+          <span
+            className={`w-2 h-2 rounded-full bg-green-500 flex-shrink-0 ${
+              isRunning ? "animate-pulse" : ""
+            }`}
+          />
+          {isRunning ? (
+            <span className="text-sm text-gray-600">
+              Referring to {agentLabel} agent...
+            </span>
+          ) : (
+            <span className="text-sm text-gray-400">{agentLabel}</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Monitor alert — special amber bordered bubble with chips
+  if (msg.monitorAlert) {
+    return (
+      <MonitorAlertBubble
+        alert={msg.monitorAlert}
+        onTellMeMore={(ctx) => onChip(ctx)}
+        onDismiss={onDismissAlert}
+      />
     );
   }
 
@@ -215,9 +265,12 @@ function MessageBubble({ msg, onChip, onReferral }: MessageBubbleProps) {
 
   return (
     <div className="flex flex-col gap-1.5">
+      {msg.isAdvisorDoNotDo && (
+        <span className="text-xs text-gray-400 ml-1">Worth noting</span>
+      )}
       <div
         className={`max-w-[92%] bg-white border rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-[#111827] leading-relaxed shadow-sm ${
-          msg.isProactive
+          msg.isProactive || msg.isAdvisorDoNotDo
             ? "border-amber-300 border-l-4 border-l-amber-400"
             : "border-[#E5E5E5]"
         }`}
@@ -270,6 +323,40 @@ function MessageBubble({ msg, onChip, onReferral }: MessageBubbleProps) {
   );
 }
 
+const ADVISOR_AGENT_ORDER = [
+  "allocation",
+  "tax_implications",
+  "tlh",
+  "rate_arbitrage",
+  "timing",
+];
+
+function AdvisorOrbRow({ orbs, fading }: { orbs: string[]; fading: boolean }) {
+  if (orbs.length === 0) return null;
+  return (
+    <div
+      className={`flex flex-col gap-1.5 transition-opacity duration-300 ${
+        fading ? "opacity-0" : "opacity-100"
+      }`}
+    >
+      {orbs.map((agent) => (
+        <div
+          key={agent}
+          className="bg-[#F3F4F6] rounded-lg px-3 py-2 flex items-center gap-2.5"
+        >
+          <span className="w-3.5 h-3.5 rounded-full bg-[#16A34A] ring-2 ring-[#16A34A]/40 animate-pulse flex-shrink-0" />
+          <span className="text-xs text-[#6B7280]">
+            <span className="font-medium text-[#111827]">
+              {AGENT_LABELS[agent] ?? agent}
+            </span>
+            {" — "}Running full portfolio analysis...
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Agent Capability Popover ─────────────────────────────────────────────────
 
 function AgentCapabilityPopover({ onClose }: { onClose: () => void }) {
@@ -316,6 +403,10 @@ interface ChatPanelProps {
   onboardingChips?: string[];
   /** Whether onboarding is in progress (suppress auto-session creation) */
   onboardingInProgress?: boolean;
+  /** Monitor alerts to inject — new items trigger injection */
+  monitorAlerts?: MonitorAlertData[];
+  /** Unread alert count for badge display */
+  unreadAlertCount?: number;
 }
 
 export function ChatPanel({
@@ -323,17 +414,23 @@ export function ChatPanel({
   onboardingMessages,
   onboardingChips,
   onboardingInProgress,
+  monitorAlerts,
+  unreadAlertCount,
 }: ChatPanelProps) {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [activeAgents, setActiveAgents] = useState<string[]>([]);
-  const [agentCards, setAgentCards] = useState<AgentCard[]>([]);
   const [thinkingFading, setThinkingFading] = useState(false);
   const [headerStatus, setHeaderStatus] = useState<HeaderStatus>("");
   const [initError, setInitError] = useState(false);
   const [showCapabilities, setShowCapabilities] = useState(false);
+  // Advisor mode state
+  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [advisorOrbs, setAdvisorOrbs] = useState<string[]>([]);
+  const [advisorOrbsFading, setAdvisorOrbsFading] = useState(false);
+  const advisorTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pendingChipsRef = useRef<string[] | null>(null);
@@ -342,6 +439,10 @@ export function ChatPanel({
   const sessionInitedRef = useRef(false);
   // Tracks the most recent assistant message ID so chips always land on the last response
   const currentResponseIdRef = useRef<string>("");
+  // Always-current snapshot of messages (send() is memoized without messages in deps)
+  const messagesRef = useRef<UIMessage[]>([]);
+  // Alert IDs we've already sent an auto-dismiss call for (fire-once per alert)
+  const autoDismissedRef = useRef<Set<number>>(new Set());
 
   // Normal session init — skipped if onboarding is active or if onboarding messages
   // were injected (WellyIntro already created the session for Message 3)
@@ -400,9 +501,33 @@ export function ChatPanel({
     });
   }, [onboardingChips]);
 
+  // Inject monitor alerts into the chat stream
+  // Track injected IDs to avoid duplicates
+  const injectedAlertIds = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (!monitorAlerts || monitorAlerts.length === 0) return;
+    const newAlerts = monitorAlerts.filter(
+      (a) => !injectedAlertIds.current.has(a.id)
+    );
+    if (newAlerts.length === 0) return;
+    const alertMessages: UIMessage[] = newAlerts.map((a) => ({
+      id: `monitor-${a.id}`,
+      role: "assistant",
+      content: a.message,
+      monitorAlert: a,
+    }));
+    newAlerts.forEach((a) => injectedAlertIds.current.add(a.id));
+    setMessages((prev) => [...prev, ...alertMessages]);
+  }, [monitorAlerts]);
+
+  // Keep messagesRef in sync so send() always sees current messages
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, agentCards, streaming]);
+  }, [messages, streaming]);
 
   useEffect(() => {
     const ta = textareaRef.current;
@@ -414,6 +539,7 @@ export function ChatPanel({
   useEffect(() => {
     return () => {
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+      advisorTimersRef.current.forEach(clearTimeout);
     };
   }, []);
 
@@ -432,6 +558,15 @@ export function ChatPanel({
 
       if (!text.trim() || streaming) return;
 
+      // Auto-dismiss any monitor alerts still in the thread when the user replies
+      messagesRef.current
+        .filter((m) => m.monitorAlert != null && !autoDismissedRef.current.has(m.monitorAlert!.id))
+        .forEach((m) => {
+          const id = m.monitorAlert!.id;
+          autoDismissedRef.current.add(id);
+          dismissMonitorAlert(id).catch(() => null);
+        });
+
       const userMsg: UIMessage = {
         id: `u-${Date.now()}`,
         role: "user",
@@ -449,7 +584,6 @@ export function ChatPanel({
       setInput("");
       setStreaming(true);
       setActiveAgents([]);
-      setAgentCards([]);
       setThinkingFading(false);
       setHeaderStatus("");
       pendingChipsRef.current = null;
@@ -462,13 +596,16 @@ export function ChatPanel({
           if (ev.type === "routing") {
             setHeaderStatus("routing");
           } else if (ev.type === "handoff") {
-            setAgentCards((prev) => [
+            const orbId = `orb-${ev.agent as string}-${Date.now()}`;
+            setMessages((prev) => [
               ...prev,
               {
-                id: ev.agent as string,
+                id: orbId,
+                role: "assistant" as const,
+                type: "orb" as const,
+                content: "",
                 agent: ev.agent as string,
-                message: ev.message as string,
-                done: false,
+                orbStatus: "running" as const,
               },
             ]);
             setHeaderStatus("agents");
@@ -478,16 +615,21 @@ export function ChatPanel({
             setActiveAgents((prev) =>
               prev.filter((a) => a !== (ev.agent as string))
             );
-            setAgentCards((prev) =>
-              prev.map((c) =>
-                c.id === (ev.agent as string) ? { ...c, done: true } : c
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.type === "orb" && m.agent === (ev.agent as string)
+                  ? { ...m, orbStatus: "complete" as const }
+                  : m
               )
             );
           } else if (ev.type === "response") {
             setHeaderStatus("synthesizing");
             setThinkingFading(true);
+            setMessages((prev) =>
+              prev.map((m) => (m.type === "orb" ? { ...m, fading: true } : m))
+            );
             fadeTimerRef.current = setTimeout(() => {
-              setAgentCards([]);
+              setMessages((prev) => prev.filter((m) => m.type !== "orb"));
               setThinkingFading(false);
             }, 300);
 
@@ -536,9 +678,12 @@ export function ChatPanel({
             currentResponseIdRef.current = refId;
 
             setThinkingFading(true);
+            setMessages((prev) =>
+              prev.map((m) => (m.type === "orb" ? { ...m, fading: true } : m))
+            );
             if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
             fadeTimerRef.current = setTimeout(() => {
-              setAgentCards([]);
+              setMessages((prev) => prev.filter((m) => m.type !== "orb"));
               setThinkingFading(false);
             }, 300);
 
@@ -581,7 +726,7 @@ export function ChatPanel({
       } finally {
         setStreaming(false);
         setActiveAgents([]);
-        setAgentCards([]);
+        setMessages((prev) => prev.filter((m) => m.type !== "orb"));
         setThinkingFading(false);
         setHeaderStatus("");
       }
@@ -589,9 +734,86 @@ export function ChatPanel({
     [session, streaming]
   );
 
+  async function handleGetFullAdvice() {
+    if (advisorLoading || streaming) return;
+
+    setAdvisorLoading(true);
+    setAdvisorOrbs([]);
+    setAdvisorOrbsFading(false);
+
+    // Clear any previous stagger timers
+    advisorTimersRef.current.forEach(clearTimeout);
+    advisorTimersRef.current = [];
+
+    // Stagger orb appearance at 300ms intervals
+    ADVISOR_AGENT_ORDER.forEach((agent, i) => {
+      const t = setTimeout(() => {
+        setAdvisorOrbs((prev) => [...prev, agent]);
+      }, i * 300);
+      advisorTimersRef.current.push(t);
+    });
+
+    try {
+      const report = await getAdvisorReport();
+
+      // Clear stagger timers (likely already fired, but safety)
+      advisorTimersRef.current.forEach(clearTimeout);
+      advisorTimersRef.current = [];
+
+      // Ensure all orbs shown before fading
+      setAdvisorOrbs(ADVISOR_AGENT_ORDER);
+      setAdvisorOrbsFading(true);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      setAdvisorOrbs([]);
+      setAdvisorOrbsFading(false);
+
+      // Message 1: headline
+      const msg1: UIMessage = {
+        id: `advisor-1-${Date.now()}`,
+        role: "assistant",
+        content: report.headline,
+      };
+      setMessages((prev) => [...prev, msg1]);
+
+      // Message 2: full_picture (800ms gap)
+      await new Promise<void>((resolve) => setTimeout(resolve, 800));
+      const msg2: UIMessage = {
+        id: `advisor-2-${Date.now()}`,
+        role: "assistant",
+        content: report.full_picture,
+      };
+      setMessages((prev) => [...prev, msg2]);
+
+      // Message 3: do_not_do (800ms gap) — amber border + "Worth noting" + chips
+      await new Promise<void>((resolve) => setTimeout(resolve, 800));
+      const msg3: UIMessage = {
+        id: `advisor-3-${Date.now()}`,
+        role: "assistant",
+        content: report.do_not_do,
+        isAdvisorDoNotDo: true,
+        follow_up_chips: report.chips || [],
+      };
+      setMessages((prev) => [...prev, msg3]);
+    } catch {
+      advisorTimersRef.current.forEach(clearTimeout);
+      advisorTimersRef.current = [];
+      setAdvisorOrbs([]);
+      setAdvisorOrbsFading(false);
+    } finally {
+      setAdvisorLoading(false);
+    }
+  }
+
   function handleReferral(agent: string) {
     const agentName = AGENT_FULL_NAMES[agent] ?? agent;
     send(`Ask the ${agentName} agent about this`);
+  }
+
+  function handleDismissAlert(alertId: number) {
+    setMessages((prev) =>
+      prev.filter((m) => m.monitorAlert?.id !== alertId)
+    );
   }
 
   function handleKey(e: ReactKeyboardEvent<HTMLTextAreaElement>) {
@@ -610,9 +832,9 @@ export function ChatPanel({
   if (headerStatus === "routing") {
     headerStatusText = "Routing your question...";
   } else if (headerStatus === "agents") {
-    const runningNames = agentCards
-      .filter((c) => !c.done)
-      .map((c) => AGENT_LABELS[c.agent] ?? c.agent);
+    const runningNames = messages
+      .filter((m) => m.type === "orb" && m.orbStatus === "running")
+      .map((m) => AGENT_LABELS[m.agent ?? ""] ?? m.agent ?? "");
     headerStatusText =
       runningNames.length > 0 ? runningNames.join(" · ") : "Running agents...";
   } else if (headerStatus === "synthesizing") {
@@ -620,9 +842,13 @@ export function ChatPanel({
   }
 
   const showThinkingDots =
-    streaming && agentCards.length > 0 && !thinkingFading;
+    streaming &&
+    messages.some(
+      (m) => m.type === "orb" && m.orbStatus === "running" && !m.fading
+    ) &&
+    !thinkingFading;
 
-  const canSend = !streaming && !!input.trim() && !onboardingInProgress;
+  const canSend = !streaming && !advisorLoading && !!input.trim() && !onboardingInProgress;
 
   return (
     <div className="flex flex-col h-full bg-white border-l border-[#E5E5E5]">
@@ -642,6 +868,34 @@ export function ChatPanel({
             </span>
           )}
         </div>
+
+        {/* Unread alert badge */}
+        {unreadAlertCount != null && unreadAlertCount > 0 && (
+          <div className="relative flex items-center">
+            <Bell className="w-4 h-4 text-amber-500" />
+            <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-amber-400 text-white text-[9px] font-bold flex items-center justify-center leading-none">
+              {unreadAlertCount > 9 ? "9+" : unreadAlertCount}
+            </span>
+          </div>
+        )}
+
+        {/* Get Full Advice button */}
+        {!onboardingInProgress && (
+          <button
+            onClick={handleGetFullAdvice}
+            disabled={advisorLoading || streaming}
+            className="flex items-center gap-1.5 text-sm font-medium rounded-full bg-black text-white px-4 py-1.5 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+          >
+            {advisorLoading ? (
+              <>
+                <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                <span>Analyzing...</span>
+              </>
+            ) : (
+              "Get Full Advice"
+            )}
+          </button>
+        )}
 
         {/* Agent capability tooltip trigger */}
         <div className="relative">
@@ -686,11 +940,17 @@ export function ChatPanel({
         ) : (
           <>
             {messages.map((msg) => (
-              <MessageBubble key={msg.id} msg={msg} onChip={send} onReferral={handleReferral} />
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                onChip={send}
+                onReferral={handleReferral}
+                onDismissAlert={handleDismissAlert}
+              />
             ))}
 
-            <AgentThinkingIndicator cards={agentCards} fading={thinkingFading} />
             {showThinkingDots && <WellyThinkingDots />}
+            <AdvisorOrbRow orbs={advisorOrbs} fading={advisorOrbsFading} />
             <div ref={bottomRef} />
           </>
         )}
@@ -708,7 +968,7 @@ export function ChatPanel({
           onKeyDown={handleKey}
           placeholder="Ask Welly anything…"
           rows={1}
-          disabled={streaming || initError || onboardingInProgress}
+          disabled={streaming || advisorLoading || initError || onboardingInProgress}
           className="flex-1 resize-none rounded-xl border border-[#E5E5E5] px-3 py-2.5 text-sm text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#111827]/20 focus:border-[#111827] transition-all leading-snug"
           style={{ minHeight: "40px", maxHeight: "120px" }}
         />

@@ -14,6 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from api.routes import router
 from database import create_tables, seed_demo_user
+from services.monitor import PortfolioMonitor
 
 load_dotenv()
 
@@ -53,6 +54,39 @@ class WebSocketManager:
 
 
 ws_manager = WebSocketManager()
+
+
+class UserWebSocketManager:
+    """WebSocket connections keyed by user_id string (for monitor alerts)."""
+
+    def __init__(self) -> None:
+        self._connections: dict[str, list[WebSocket]] = defaultdict(list)
+
+    async def connect(self, user_id: str, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._connections[user_id].append(websocket)
+
+    def disconnect(self, user_id: str, websocket: WebSocket) -> None:
+        conns = self._connections.get(user_id, [])
+        if websocket in conns:
+            conns.remove(websocket)
+        if not conns and user_id in self._connections:
+            del self._connections[user_id]
+
+    async def broadcast(self, user_id: str, message: Any) -> None:
+        payload = json.dumps(message)
+        dead = []
+        for ws in self._connections.get(user_id, []):
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(user_id, ws)
+
+
+user_ws_manager = UserWebSocketManager()
+_monitor = PortfolioMonitor()
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +135,10 @@ async def lifespan(app: FastAPI):
     logger.info("Database tables created / verified.")
     await seed_demo_user()
     logger.info("Demo user seeded / already exists.")
+    _monitor.start(app.state.user_ws_manager)
+    logger.info("PortfolioMonitor started.")
     yield
+    await _monitor.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +157,9 @@ app.add_middleware(
 )
 app.add_middleware(JWTMiddleware)
 
-# Attach WebSocket manager to app state so routes can access it
+# Attach WebSocket managers to app state so routes can access them
 app.state.ws_manager = ws_manager
+app.state.user_ws_manager = user_ws_manager
 
 app.include_router(router)
 

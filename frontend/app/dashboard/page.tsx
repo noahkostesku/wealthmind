@@ -115,26 +115,26 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>("1mo");
   const [txLoading, setTxLoading] = useState(true);
 
+  // Re-fetch performance data & transactions whenever the portfolio refreshes
+  // (portfolio changes after every buy/sell/deposit/withdraw via context refresh)
   useEffect(() => {
+    if (portLoading) return;
     getPerformance()
       .then((d) => {
         setPerf(d);
         setChartData(buildChartData(d, period));
       })
       .catch(() => null);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    getTransactionHistory()
+      .then((txs) => setTransactions(txs.slice(0, 5)))
+      .catch(() => null)
+      .finally(() => setTxLoading(false));
+  }, [portfolio]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-build chart when period changes (once perf is loaded)
   useEffect(() => {
     if (perf) setChartData(buildChartData(perf, period));
   }, [period, perf]);
-
-  useEffect(() => {
-    getTransactionHistory()
-      .then((txs) => setTransactions(txs.slice(0, 5)))
-      .catch(() => null)
-      .finally(() => setTxLoading(false));
-  }, []);
 
   // Derived values from portfolio
   const totalGain = portfolio?.total_gain_loss_cad ?? 0;
@@ -148,7 +148,7 @@ export default function DashboardPage() {
     (allocation["fhsa"] ?? 0);
   const nonReg = allocation["non_registered"] ?? 0;
   const crypto = allocation["crypto"] ?? 0;
-  const cash = allocation["wealthsimple_chequing"] ?? 0;
+  const cash = allocation["chequing"] ?? allocation["wealthsimple_chequing"] ?? 0;
 
   const donutData = [
     { name: "Registered", value: registered },

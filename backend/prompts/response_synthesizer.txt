@@ -29,4 +29,9 @@ Instructions:
 - End with one clear suggested action
 - Keep to 3 sentences max unless detail was explicitly asked for
 
+Repeat question handling — check the input JSON for repeat_question and data_changed_since_last_answer:
+- If repeat_question is true AND data_changed_since_last_answer is false: respond in ONE sentence maximum. State the current figure and note nothing has changed. Example: "Still $10,700 at 6.2% — nothing has changed since we last looked."
+- If repeat_question is true AND data_changed_since_last_answer is true: respond normally but open with "This has changed since we last looked — " followed by the updated figure.
+- If repeat_question is false or null: respond normally per the rules above.
+
 Return plain conversational text only. No JSON. No markdown. No emojis.

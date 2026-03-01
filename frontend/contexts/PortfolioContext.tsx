@@ -6,6 +6,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import { getPortfolio } from "@/lib/api";
@@ -29,12 +30,16 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
   const [portfolio, setPortfolio] = useState<PortfolioSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const hasLoaded = useRef(false);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    // Only show loading skeleton on initial load, not on subsequent refreshes
+    // so pages don't flash skeleton loaders after every trade/deposit/withdraw
+    if (!hasLoaded.current) setLoading(true);
     try {
       const data = await getPortfolio();
       setPortfolio(data);
+      hasLoaded.current = true;
       setError(null);
     } catch {
       setError("Could not load portfolio data.");

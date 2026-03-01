@@ -16,6 +16,9 @@ import type {
   FinancialProfile,
   AnalysisRun,
   Insight,
+  InterceptionResult,
+  MonitorAlertData,
+  AdvisorReport,
 } from "@/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -172,6 +175,30 @@ export async function getTransactionHistory(): Promise<Transaction[]> {
   return get<Transaction[]>("/trade/history");
 }
 
+export async function interceptTrade(
+  accountId: number,
+  ticker: string,
+  shares: number,
+  action: "buy" | "sell"
+): Promise<InterceptionResult> {
+  return post<InterceptionResult>("/trade/intercept", {
+    account_id: accountId,
+    ticker,
+    shares,
+    action,
+  });
+}
+
+// ─── Monitor Alerts ────────────────────────────────────────────────────────────
+
+export async function getMonitorAlerts(): Promise<MonitorAlertData[]> {
+  return get<MonitorAlertData[]>("/monitor/alerts");
+}
+
+export async function dismissMonitorAlert(alertId: number): Promise<void> {
+  await post(`/monitor/alerts/${alertId}/dismiss`);
+}
+
 // ─── FX ───────────────────────────────────────────────────────────────────────
 
 export async function getExchangeRate(
@@ -270,6 +297,12 @@ export async function getOnboardedStatus(): Promise<{ onboarded: boolean }> {
 
 export async function completeOnboarding(): Promise<{ success: boolean }> {
   return post<{ success: boolean }>("/user/complete-onboarding");
+}
+
+// ─── Advisor ──────────────────────────────────────────────────────────────────
+
+export async function getAdvisorReport(): Promise<AdvisorReport> {
+  return post<AdvisorReport>("/advisor/report");
 }
 
 // ─── Legacy (backward compat) ─────────────────────────────────────────────────

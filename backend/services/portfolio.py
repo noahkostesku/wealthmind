@@ -58,6 +58,7 @@ async def get_portfolio_snapshot(user_id: int, db: AsyncSession) -> dict:
 
     total_value_cad = 0.0
     total_cost_cad = 0.0
+    total_unrealized_gl = 0.0
     by_account_type: dict[str, float] = {}
     by_asset_type: dict[str, float] = {}
     accounts_data = []
@@ -83,6 +84,7 @@ async def get_portfolio_snapshot(user_id: int, db: AsyncSession) -> dict:
 
             acct_equity += current_value
             total_cost_cad += cost_basis
+            total_unrealized_gl += unrealized_gl
 
             # Track by asset type
             by_asset_type[pos.asset_type] = by_asset_type.get(pos.asset_type, 0.0) + current_value
@@ -126,7 +128,8 @@ async def get_portfolio_snapshot(user_id: int, db: AsyncSession) -> dict:
             "positions": positions_data,
         })
 
-    total_gl = total_value_cad - total_cost_cad
+    # Gain/loss is the sum of unrealized gains on positions only — cash is NOT a gain
+    total_gl = total_unrealized_gl
     total_gl_pct = (total_gl / total_cost_cad * 100) if total_cost_cad else 0.0
 
     # Contribution room helpers

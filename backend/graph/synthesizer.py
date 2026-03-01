@@ -29,10 +29,39 @@ def _load_prompt(name: str) -> str:
     return (_PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
+def _findings_changed(new_findings: dict, previous_findings: dict | None) -> bool:
+    """
+    Return True if the dollar amounts in new_findings differ meaningfully from
+    previous_findings. Used to decide whether a repeat question warrants a fresh answer.
+    """
+    if not previous_findings:
+        return True
+
+    def _extract_amounts(f: dict) -> set[int]:
+        amounts = set()
+        for v in f.values():
+            if isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        try:
+                            amounts.add(round(float(item.get("dollar_impact", 0))))
+                        except (TypeError, ValueError):
+                            pass
+        return amounts
+
+    new_amounts = _extract_amounts(new_findings)
+    prev_amounts = _extract_amounts(previous_findings)
+    if not new_amounts:
+        return False
+    return new_amounts != prev_amounts
+
+
 async def synthesize_response(
     user_message: str,
     findings: dict,
     history: list[dict],
+    repeat_question: bool = False,
+    previous_findings: dict | None = None,
 ) -> str:
     """
     Synthesize agent domain_findings into a conversational response.
@@ -42,6 +71,8 @@ async def synthesize_response(
         findings: dict keyed by domain (allocation, tax, tlh, rates, timing)
                   each value is a list of finding objects.
         history: Recent conversation messages for context.
+        repeat_question: True if the user asked essentially the same question recently.
+        previous_findings: The findings from the previous answer, for change detection.
 
     Returns:
         Plain text answer.
@@ -50,11 +81,17 @@ async def synthesize_response(
 
     recent_history = history[-6:] if len(history) > 6 else history
 
+    data_changed: bool | None = None
+    if repeat_question:
+        data_changed = _findings_changed(findings, previous_findings)
+
     user_content = json.dumps(
         {
             "user_message": user_message,
             "agent_findings": findings,
             "recent_history": recent_history,
+            "repeat_question": repeat_question,
+            "data_changed_since_last_answer": data_changed,
         },
         indent=2,
     )
@@ -204,6 +241,42 @@ async def get_cross_referral_candidates(
         if result.get("refer")
     ]
     return referrals[:max_referrals]
+
+
+_ADVISOR_CHIP_SYSTEM_PROMPT = """You are generating follow-up question suggestions after a financial advisor has delivered a full portfolio analysis.
+Based on the headline and full picture provided, generate exactly 3 specific follow-up questions the client would naturally ask next.
+
+Rules:
+- Make questions specific to the actions mentioned — not generic
+- Include real dollar figures or account types from the analysis where possible
+- Each question should be a natural follow-up to explore a specific action
+- Keep each question under 70 characters
+- Return ONLY a JSON array of strings: ["Question 1?", "Question 2?", "Question 3?"]"""
+
+
+async def generate_advisor_chips(headline: str, full_picture: str) -> list[str]:
+    """Generate 3 specific follow-up chips from advisor headline + full_picture."""
+    user_content = json.dumps({"headline": headline, "full_picture": full_picture}, indent=2)
+    llm = ChatAnthropic(model=_MODEL, max_tokens=256)
+    try:
+        resp = await llm.ainvoke(
+            [
+                SystemMessage(content=_ADVISOR_CHIP_SYSTEM_PROMPT),
+                HumanMessage(content=user_content),
+            ]
+        )
+        raw = resp.content.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        chips = json.loads(raw.strip())
+        if isinstance(chips, list):
+            return [str(c) for c in chips[:3]]
+        return []
+    except Exception as exc:
+        logger.error("Advisor chip generation failed: %s", exc)
+        return []
 
 
 async def generate_follow_up_chips(

@@ -20,6 +20,35 @@ def _load_prompt(name: str) -> str:
     return (_PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
+def _detect_repeat_question(message: str, history: list[dict]) -> bool:
+    """
+    Return True if the current message is semantically very similar to any of
+    the last 3 user messages in history (Jaccard word-overlap >= 0.6).
+    """
+    past_user = [
+        m["content"].lower().strip()
+        for m in history
+        if m.get("role") == "user"
+    ][-3:]
+
+    if not past_user:
+        return False
+
+    current_words = set(message.lower().split())
+    if not current_words:
+        return False
+
+    for prev in past_user:
+        prev_words = set(prev.split())
+        if not prev_words:
+            continue
+        union = current_words | prev_words
+        overlap = len(current_words & prev_words) / len(union)
+        if overlap >= 0.6:
+            return True
+    return False
+
+
 async def conversation_router(
     message: str,
     history: list[dict],
@@ -37,6 +66,8 @@ async def conversation_router(
     }
     """
     system_prompt = _load_prompt("conversation_router.txt")
+
+    repeat_question = _detect_repeat_question(message, history)
 
     # Inject last 6 messages and a summary of last_findings
     recent_history = history[-6:] if len(history) > 6 else history
@@ -76,6 +107,7 @@ async def conversation_router(
         # Normalise key name in case model uses old "reasoning" field
         if "reasoning" in result and "routing_reasoning" not in result:
             result["routing_reasoning"] = result.pop("reasoning")
+        result["repeat_question"] = repeat_question
         return result
     except Exception as exc:
         logger.error("Conversation router failed: %s", exc)
@@ -84,4 +116,5 @@ async def conversation_router(
             "routing_reasoning": "fallback: router error, invoking all agents",
             "can_answer_from_context": False,
             "direct_response": None,
+            "repeat_question": repeat_question,
         }

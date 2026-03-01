@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from database import Account, AsyncSessionLocal, Conversation, Position, Transaction, User, get_db
+from database import Account, AdvisorCache, AsyncSessionLocal, Conversation, MonitorAlert, Position, Transaction, User, get_db
 from graph.agents import (
     allocation_agent,
     rate_arbitrage_agent,
@@ -362,6 +362,33 @@ async def trade_sell(body: SellRequest, db: AsyncSession = Depends(get_db)):
     return await execute_sell(_DEMO_USER_ID, body.account_id, body.ticker, body.shares, price_cad, db)
 
 
+class InterceptRequest(BaseModel):
+    account_id: int
+    ticker: str
+    shares: float
+    action: str  # "buy" | "sell"
+
+
+@router.post("/trade/intercept")
+async def trade_intercept(body: InterceptRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Simulate a trade and run relevant agents before execution.
+    Returns interception analysis within 8 seconds.
+    """
+    from services.interception import intercept_trade
+    result = await intercept_trade(
+        _DEMO_USER_ID, body.account_id, body.ticker, body.shares, body.action, db
+    )
+    logger.debug(
+        "trade_intercept: should_intercept=%s headline=%r ticker=%s action=%s",
+        result.get("should_intercept"),
+        result.get("headline"),
+        body.ticker,
+        body.action,
+    )
+    return result
+
+
 @router.get("/trade/history")
 async def trade_history(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -631,9 +658,6 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
     conv_id = conv.id
     history: list[dict] = list(conv.messages or [])
     last_findings: dict = dict(conv.last_findings or {})
-
-    # Load live data upfront while we still have the injected db session
-    portfolio = await get_portfolio_snapshot(_DEMO_USER_ID, db)
     cra_rules = _load_cra_rules()
 
     async def generate():
@@ -644,6 +668,10 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
 
         try:
             run_id = f"chat-{body.session_id}"
+
+            # ── 0. Fresh portfolio — never use cached/session-stored data ─
+            async with AsyncSessionLocal() as fresh_db:
+                portfolio = await get_portfolio_snapshot(_DEMO_USER_ID, fresh_db)
 
             # ── 1. Route ──────────────────────────────────────────────────
             routing = await conversation_router(body.message, history, last_findings)
@@ -979,3 +1007,123 @@ async def chat_whatif(body: WhatIfRequest, db: AsyncSession = Depends(get_db)):
         "modified_findings": modified_findings,
         "delta": delta,
     }
+
+
+# ===========================================================================
+# MONITOR ROUTES
+# ===========================================================================
+
+@router.get("/monitor/alerts")
+async def get_monitor_alerts(db: AsyncSession = Depends(get_db)):
+    """Return unsurfaced (pending) alerts for the demo user and mark them surfaced."""
+    result = await db.execute(
+        select(MonitorAlert)
+        .where(
+            MonitorAlert.user_id == _DEMO_USER_ID,
+            MonitorAlert.dismissed_at.is_(None),
+        )
+        .order_by(MonitorAlert.created_at.desc())
+        .limit(10)
+    )
+    alerts = result.scalars().all()
+
+    now = datetime.datetime.utcnow()
+    for a in alerts:
+        if a.surfaced_at is None:
+            a.surfaced_at = now
+    if alerts:
+        await db.commit()
+
+    return [
+        {
+            "id": a.id,
+            "alert_type": a.alert_type,
+            "message": a.message,
+            "ticker": a.ticker,
+            "dollar_impact": a.dollar_impact,
+            "created_at": a.created_at.isoformat(),
+        }
+        for a in alerts
+    ]
+
+
+@router.post("/monitor/alerts/{alert_id}/dismiss")
+async def dismiss_monitor_alert(alert_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(MonitorAlert).where(
+            MonitorAlert.id == alert_id,
+            MonitorAlert.user_id == _DEMO_USER_ID,
+        )
+    )
+    alert = result.scalar_one_or_none()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert.dismissed_at = datetime.datetime.utcnow()
+    await db.commit()
+    return {"success": True}
+
+
+# ===========================================================================
+# ADVISOR ROUTES
+# ===========================================================================
+
+@router.post("/advisor/report")
+async def advisor_report(db: AsyncSession = Depends(get_db)):
+    """
+    Run all 5 agents + synthesize a three-part advisor report.
+    Returns cached result if generated within last 10 minutes.
+    """
+    from services.advisor import generate_advisor_report
+    return await generate_advisor_report(_DEMO_USER_ID, db)
+
+
+@router.get("/debug/consistency")
+async def debug_consistency(db: AsyncSession = Depends(get_db)):
+    """
+    Audit and repair data consistency.
+    Deletes zero-share positions and reports negative balances.
+    """
+    pos_result = await db.execute(
+        select(Position).where(Position.user_id == _DEMO_USER_ID)
+    )
+    all_positions = pos_result.scalars().all()
+
+    zero_share_deleted = 0
+    for pos in all_positions:
+        if pos.shares <= 0.000001:
+            await db.delete(pos)
+            zero_share_deleted += 1
+
+    acct_result = await db.execute(
+        select(Account).where(Account.user_id == _DEMO_USER_ID)
+    )
+    accounts = acct_result.scalars().all()
+
+    negative_balances = [
+        {"id": a.id, "product_name": a.product_name, "balance_cad": a.balance_cad}
+        for a in accounts
+        if a.balance_cad < 0 and a.account_type != "margin"
+    ]
+
+    if zero_share_deleted > 0:
+        await db.commit()
+
+    return {
+        "positions_checked": len(all_positions),
+        "zero_share_rows_deleted": zero_share_deleted,
+        "negative_balances_found": len(negative_balances),
+        "accounts_checked": len(accounts),
+        "negative_balance_accounts": negative_balances,
+    }
+
+
+@router.websocket("/ws/monitor/{user_id}")
+async def monitor_websocket(user_id: str, websocket: WebSocket):
+    """Per-user WebSocket for real-time monitor alerts."""
+    user_ws_manager = websocket.app.state.user_ws_manager
+    await user_ws_manager.connect(user_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        user_ws_manager.disconnect(user_id, websocket)

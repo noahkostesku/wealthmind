@@ -219,6 +219,37 @@ export interface AgentStatus {
   status: "idle" | "running" | "complete" | "error";
 }
 
+// ─── Trade Interception ────────────────────────────────────────────────────────
+export interface InterceptionResult {
+  should_intercept: boolean;
+  urgency?: "warning" | "info" | "clear";
+  headline?: string;
+  findings?: Insight[];
+  better_alternative?: string | null;
+  proceed_anyway_label?: string;
+}
+
+// ─── Advisor Mode ─────────────────────────────────────────────────────────────
+export interface AdvisorReport {
+  headline: string;
+  full_picture: string;
+  do_not_do: string;
+  total_opportunity: number;
+  chips: string[];
+  generated_at: string;
+  cached: boolean;
+}
+
+// ─── Monitor Alerts ────────────────────────────────────────────────────────────
+export interface MonitorAlertData {
+  id: number;
+  alert_type: string;
+  message: string;
+  ticker?: string | null;
+  dollar_impact?: number | null;
+  created_at: string;
+}
+
 // ─── Legacy profile type (backward compat with existing components) ───────────
 export interface FinancialProfile {
   client: {

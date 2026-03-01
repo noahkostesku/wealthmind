@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/modal";
-import { getQuote, executeBuy, executeSell } from "@/lib/api";
+import { getQuote, getPositions, executeBuy, executeSell, interceptTrade } from "@/lib/api";
 import { usePortfolio } from "@/contexts/PortfolioContext";
-import type { Account } from "@/types";
+import type { Account, InterceptionResult } from "@/types";
 
 interface TradeModalProps {
   open: boolean;
@@ -23,6 +23,72 @@ function cad(n: number) {
   }).format(n);
 }
 
+// ─── InterceptionPanel ────────────────────────────────────────────────────────
+
+interface InterceptionPanelProps {
+  result: InterceptionResult;
+  onProceed: () => void;
+  onSuggestion: () => void;
+  disabled: boolean;
+}
+
+function InterceptionPanel({
+  result,
+  onProceed,
+  onSuggestion,
+  disabled,
+}: InterceptionPanelProps) {
+  const isWarning = result.urgency === "warning";
+  const borderColor = isWarning ? "border-amber-400" : "border-blue-400";
+  const bgColor = isWarning ? "bg-amber-50" : "bg-blue-50";
+
+  return (
+    <div
+      className={`mt-4 border-l-4 ${borderColor} ${bgColor} rounded-r-lg p-4 animate-in slide-in-from-top-2 duration-200`}
+    >
+      {/* Welly label */}
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+        <span className="text-xs text-gray-500 font-medium">Welly</span>
+      </div>
+
+      {/* Headline */}
+      <p className="text-sm font-semibold text-gray-900 leading-snug mb-1">
+        {result.headline}
+      </p>
+
+      {/* Better alternative */}
+      {result.better_alternative && (
+        <p className="text-sm text-gray-600 mb-3 leading-snug">
+          {result.better_alternative}
+        </p>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-3 mt-3">
+        {result.better_alternative && (
+          <button
+            onClick={onSuggestion}
+            disabled={disabled}
+            className="px-3 py-1.5 rounded-lg bg-[#111827] text-white text-sm font-medium hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+          >
+            Take Welly&apos;s suggestion
+          </button>
+        )}
+        <button
+          onClick={onProceed}
+          disabled={disabled}
+          className="text-sm text-gray-500 hover:text-gray-800 disabled:opacity-50 transition-colors"
+        >
+          {result.proceed_anyway_label ?? "Proceed anyway"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
 export function TradeModal({
   open,
   onClose,
@@ -39,8 +105,15 @@ export function TradeModal({
   const [price, setPrice] = useState<number | null>(null);
   const [priceLoading, setPriceLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [intercepting, setIntercepting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  // Interception state
+  const [interceptionResult, setInterceptionResult] =
+    useState<InterceptionResult | null>(null);
+  const [interceptChecked, setInterceptChecked] = useState(false);
+  // Fresh position data fetched from API for sell mode
+  const [freshShares, setFreshShares] = useState<number | null>(null);
 
   // Reset on open
   useEffect(() => {
@@ -51,8 +124,17 @@ export function TradeModal({
       setError("");
       setSuccess("");
       setPrice(null);
+      setInterceptionResult(null);
+      setInterceptChecked(false);
+      setFreshShares(null);
     }
   }, [open, initialTicker, initialMode]);
+
+  // Reset interception when trade details change
+  useEffect(() => {
+    setInterceptionResult(null);
+    setInterceptChecked(false);
+  }, [ticker, shares, accountId, mode]);
 
   // Fetch live price when ticker changes
   useEffect(() => {
@@ -94,7 +176,36 @@ export function TradeModal({
     return () => clearInterval(iv);
   }, [open, ticker]);
 
-  // Auto-select first eligible account
+  // Fetch fresh position data when in sell mode — ensures correct account and share count
+  useEffect(() => {
+    if (!open || mode !== "sell" || !ticker.trim()) {
+      setFreshShares(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const positions = await getPositions();
+        if (cancelled) return;
+        const match = positions.find(
+          (p) => p.ticker.toUpperCase() === ticker.trim().toUpperCase()
+        );
+        if (match) {
+          setFreshShares(match.shares);
+          if (match.account_id) setAccountId(match.account_id);
+        } else {
+          setFreshShares(null);
+        }
+      } catch {
+        // silent — fall back to positions from accounts prop
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode, ticker]);
+
+  // Auto-select first eligible account (sell mode uses fetch above)
   useEffect(() => {
     if (!accountId && eligibleAccounts.length > 0) {
       setAccountId(eligibleAccounts[0].id);
@@ -104,18 +215,17 @@ export function TradeModal({
   const eligibleAccounts = accounts.filter(
     (a) => a.subtype === "self_directed" && a.is_active
   );
-
   const selectedAccount = eligibleAccounts.find((a) => a.id === accountId);
   const sharesNum = parseFloat(shares) || 0;
   const estimated = price != null && sharesNum > 0 ? price * sharesNum : null;
 
-  // For sell: check current position
   const currentPosition = selectedAccount?.positions?.find(
     (p) => p.ticker.toUpperCase() === ticker.toUpperCase()
   );
-  const maxSell = currentPosition?.shares ?? 0;
+  const maxSell = freshShares ?? currentPosition?.shares ?? 0;
 
-  async function handleSubmit() {
+  // ── Step 1: "Review Trade" — run intercept check ──────────────────────────
+  async function handleReview() {
     if (!accountId || !ticker.trim() || sharesNum <= 0) {
       setError("Please fill in all fields.");
       return;
@@ -124,6 +234,33 @@ export function TradeModal({
       setError(`You only have ${maxSell} shares to sell.`);
       return;
     }
+    setError("");
+    setIntercepting(true);
+    try {
+      const result = await interceptTrade(
+        accountId as number,
+        ticker.trim().toUpperCase(),
+        sharesNum,
+        mode
+      );
+      setInterceptionResult(result);
+      setInterceptChecked(true);
+      if (!result.should_intercept) {
+        // No material findings — proceed directly
+        await executeTradeNow();
+      }
+    } catch {
+      // Intercept call failed — proceed anyway
+      setInterceptChecked(true);
+      await executeTradeNow();
+    } finally {
+      setIntercepting(false);
+    }
+  }
+
+  // ── Step 2: Execute the trade ─────────────────────────────────────────────
+  async function executeTradeNow() {
+    if (!accountId || !ticker.trim() || sharesNum <= 0) return;
     setSubmitting(true);
     setError("");
     try {
@@ -144,8 +281,12 @@ export function TradeModal({
       setError(e instanceof Error ? e.message : "Trade failed.");
     } finally {
       setSubmitting(false);
+      setInterceptionResult(null);
     }
   }
+
+  const isReady =
+    !submitting && !intercepting && !!ticker && !!shares && !!accountId;
 
   return (
     <Modal open={open} onClose={onClose} title="Place Order">
@@ -234,12 +375,12 @@ export function TradeModal({
             placeholder="0"
             className="w-full border border-[#E5E5E5] rounded-lg px-3 py-2.5 text-sm text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#111827]/20 focus:border-[#111827] transition-all"
           />
-          {mode === "sell" && currentPosition && (
+          {mode === "sell" && maxSell > 0 && (
             <div className="flex items-center justify-between mt-1.5">
               <p className="text-xs text-[#6B7280]">
                 You hold:{" "}
                 <span className="font-medium text-[#111827]">
-                  {currentPosition.shares} shares
+                  {maxSell} shares
                 </span>
               </p>
               <button
@@ -296,19 +437,43 @@ export function TradeModal({
           </p>
         )}
 
-        <button
-          onClick={handleSubmit}
-          disabled={submitting || !ticker || !shares || !accountId}
-          className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-            mode === "buy"
-              ? "bg-[#16A34A] hover:bg-green-700"
-              : "bg-[#DC2626] hover:bg-red-700"
-          }`}
-        >
-          {submitting
-            ? "Processing…"
-            : `${mode === "buy" ? "Buy" : "Sell"} ${shares || "0"} share${sharesNum !== 1 ? "s" : ""}`}
-        </button>
+        {/* Interception panel */}
+        {interceptionResult?.should_intercept && !intercepting && (
+          <InterceptionPanel
+            result={interceptionResult}
+            onProceed={executeTradeNow}
+            onSuggestion={() => {
+              // "Take Welly's suggestion" — surfaces the better_alternative and closes without trading
+              onSuccess?.(interceptionResult.better_alternative ?? "");
+              onClose();
+            }}
+            disabled={submitting}
+          />
+        )}
+
+        {/* Primary action button — hidden once interception panel is showing */}
+        {!interceptionResult?.should_intercept && !success && (
+          <button
+            onClick={handleReview}
+            disabled={!isReady}
+            className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
+              mode === "buy"
+                ? "bg-[#16A34A] hover:bg-green-700"
+                : "bg-[#DC2626] hover:bg-red-700"
+            }`}
+          >
+            {intercepting ? (
+              <>
+                <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                Welly is checking...
+              </>
+            ) : submitting ? (
+              "Processing…"
+            ) : (
+              `Review ${mode === "buy" ? "Buy" : "Sell"}`
+            )}
+          </button>
+        )}
       </div>
     </Modal>
   );

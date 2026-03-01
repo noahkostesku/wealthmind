@@ -137,6 +137,37 @@ class ChatMessage(Base):
     timestamp: Mapped[str] = mapped_column(String)
 
 
+class AdvisorCache(Base):
+    __tablename__ = "advisor_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
+    headline: Mapped[str] = mapped_column(Text)
+    full_picture: Mapped[str] = mapped_column(Text)
+    do_not_do: Mapped[str] = mapped_column(Text)
+    total_opportunity: Mapped[int] = mapped_column(Integer, default=0)
+    chips: Mapped[list] = mapped_column(JSON, default=list)
+    generated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+
+
+class MonitorAlert(Base):
+    __tablename__ = "monitor_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), index=True)
+    alert_type: Mapped[str] = mapped_column(String)
+    message: Mapped[str] = mapped_column(Text)
+    ticker: Mapped[str | None] = mapped_column(String, nullable=True)
+    dollar_impact: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+    surfaced_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    dismissed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 async def create_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

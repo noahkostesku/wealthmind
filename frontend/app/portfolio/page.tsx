@@ -313,6 +313,23 @@ export default function PortfolioPage() {
     }))
   );
 
+  // Keep selectedPosition in sync with refreshed portfolio data
+  // so the side panel updates after a trade
+  useEffect(() => {
+    if (!selectedPosition || loading) return;
+    const updated = allPositions.find(
+      (p) =>
+        p.ticker === selectedPosition.ticker &&
+        p.account_id === selectedPosition.account_id
+    );
+    if (updated) {
+      setSelectedPosition(updated);
+    } else {
+      // Position was fully sold — close the panel
+      setSelectedPosition(null);
+    }
+  }, [portfolio]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Filter
   const filtered =
     filter === "all"
