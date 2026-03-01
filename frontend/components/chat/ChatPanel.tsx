@@ -9,7 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Send, BotMessageSquare, X, Check, Bell } from "lucide-react";
-import { createChatSession, streamChatMessage, dismissMonitorAlert, getAdvisorReport } from "@/lib/api";
+import { createChatSession, clearChatSession, streamChatMessage, dismissMonitorAlert, getAdvisorReport } from "@/lib/api";
 import type { ChatSession, MonitorAlertData } from "@/types";
 import { AGENT_CAPABILITIES } from "@/components/onboarding/WellyIntro";
 import type { WellyMessage } from "@/components/onboarding/WellyIntro";
@@ -20,6 +20,12 @@ import { MonitorAlertBubble } from "./MonitorAlert";
 interface ReferralSuggestion {
   agent: string;
   reason: string;
+}
+
+interface SearchSource {
+  title: string;
+  url: string;
+  snippet: string;
 }
 
 interface UIMessage {
@@ -40,6 +46,8 @@ interface UIMessage {
   monitorAlert?: MonitorAlertData;
   /** advisor do-not-do — amber left border + "Worth noting" label */
   isAdvisorDoNotDo?: boolean;
+  /** web search sources — rendered as clickable citation links */
+  sources?: SearchSource[];
   // orb-specific fields (used when type === "orb")
   agent?: string;
   orbStatus?: "running" | "complete";
@@ -63,6 +71,7 @@ const AGENT_LABELS: Record<string, string> = {
   tlh: "TLH",
   rate_arbitrage: "Rate",
   timing: "Timing",
+  web_search: "Web",
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -79,16 +88,32 @@ function stripMarkdown(text: string): string {
 
 function formatContent(text: string) {
   const clean = stripMarkdown(text);
-  const parts = clean.split(/(\$[\d,]+(?:\.\d{2})?)/g);
-  return parts.map((part, i) =>
-    /^\$[\d,]/.test(part) ? (
-      <strong key={i} className="text-[#16A34A] font-semibold">
-        {part}
-      </strong>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  );
+  // Split on dollar amounts and markdown links [Title](url)
+  const parts = clean.split(/(\$[\d,]+(?:\.\d{2})?|\[[^\]]+\]\([^)]+\))/g);
+  return parts.map((part, i) => {
+    if (/^\$[\d,]/.test(part)) {
+      return (
+        <strong key={i} className="text-[#16A34A] font-semibold">
+          {part}
+        </strong>
+      );
+    }
+    const linkMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (linkMatch) {
+      return (
+        <a
+          key={i}
+          href={linkMatch[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[#2563EB] hover:underline text-xs"
+        >
+          [{linkMatch[1]}]
+        </a>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -234,7 +259,7 @@ function MessageBubble({ msg, onChip, onReferral, onDismissAlert }: MessageBubbl
           />
           {isRunning ? (
             <span className="text-sm text-gray-600">
-              Referring to {agentLabel} agent...
+              {msg.agent === "web_search" ? "Searching the web..." : `Referring to ${agentLabel} agent...`}
             </span>
           ) : (
             <span className="text-sm text-gray-400">{agentLabel}</span>
@@ -295,6 +320,31 @@ function MessageBubble({ msg, onChip, onReferral, onDismissAlert }: MessageBubbl
         <div className="flex flex-wrap gap-1 ml-1">
           {msg.agent_sources.map((src) => (
             <AgentPill key={src} name={src} />
+          ))}
+        </div>
+      )}
+
+      {msg.sources && msg.sources.length > 0 && !msg.streaming && (
+        <div className="flex flex-col gap-1 ml-1 mt-1">
+          <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">Sources</span>
+          {msg.sources.map((src, idx) => (
+            <a
+              key={idx}
+              href={src.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex items-start gap-2 px-2.5 py-1.5 rounded-lg border border-zinc-100 hover:border-zinc-200 hover:bg-zinc-50 transition-colors"
+            >
+              <span className="flex-shrink-0 w-4 h-4 rounded bg-zinc-100 flex items-center justify-center mt-0.5">
+                <span className="text-[9px] font-bold text-zinc-400">{idx + 1}</span>
+              </span>
+              <span className="flex flex-col min-w-0">
+                <span className="text-xs font-medium text-[#111827] group-hover:text-[#2563EB] truncate transition-colors">
+                  {src.title}
+                </span>
+                <span className="text-[10px] text-zinc-400 truncate">{new URL(src.url).hostname}</span>
+              </span>
+            </a>
           ))}
         </div>
       )}
@@ -463,8 +513,6 @@ export function ChatPanel({
             id: "greeting",
             role: "assistant",
             content: sess.greeting,
-            agent_sources: sess.agent_sources,
-            isProactive: true,
           },
         ]);
       })
@@ -558,6 +606,35 @@ export function ChatPanel({
 
       if (!text.trim() || streaming) return;
 
+      // ── welly-clear: reset conversation ──────────────────────────────
+      if (text.trim().toLowerCase() === "welly-clear") {
+        setMessages([]);
+        setInput("");
+        setSession(null);
+        sessionInitedRef.current = false;
+        pendingChipsRef.current = null;
+        currentResponseIdRef.current = "";
+        autoDismissedRef.current = new Set();
+        // Delete old session from DB, then create a fresh one
+        try {
+          await clearChatSession();
+          const fresh = await createChatSession();
+          setSession(fresh);
+          if (fresh.greeting) {
+            setMessages([
+              {
+                id: `a-${Date.now()}`,
+                role: "assistant",
+                content: fresh.greeting,
+              },
+            ]);
+          }
+        } catch {
+          // session will be created on next message
+        }
+        return;
+      }
+
       // Auto-dismiss any monitor alerts still in the thread when the user replies
       messagesRef.current
         .filter((m) => m.monitorAlert != null && !autoDismissedRef.current.has(m.monitorAlert!.id))
@@ -595,6 +672,41 @@ export function ChatPanel({
         await streamChatMessage(activeSession.session_id, text.trim(), (ev) => {
           if (ev.type === "routing") {
             setHeaderStatus("routing");
+          } else if (ev.type === "web_search_start") {
+            // Show a search orb in the message stream
+            const searchOrbId = `orb-web_search-${Date.now()}`;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: searchOrbId,
+                role: "assistant" as const,
+                type: "orb" as const,
+                content: "",
+                agent: "web_search",
+                orbStatus: "running" as const,
+              },
+            ]);
+            setHeaderStatus("agents");
+          } else if (ev.type === "web_search_complete") {
+            // Mark search orb as complete
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.type === "orb" && m.agent === "web_search"
+                  ? { ...m, orbStatus: "complete" as const }
+                  : m
+              )
+            );
+          } else if (ev.type === "sources") {
+            // Attach web sources to the current response message
+            const sources = ev.sources as SearchSource[];
+            const targetId = currentResponseIdRef.current;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === targetId
+                  ? { ...m, sources, agent_sources: [...(m.agent_sources || []), "web_search"] }
+                  : m
+              )
+            );
           } else if (ev.type === "handoff") {
             const orbId = `orb-${ev.agent as string}-${Date.now()}`;
             setMessages((prev) => [

@@ -228,6 +228,11 @@ export async function createChatSession(): Promise<ChatSession> {
   return post<ChatSession>("/chat/session");
 }
 
+export async function clearChatSession(): Promise<void> {
+  const headers = await authHeaders();
+  await fetch(`${API_URL}/chat/session`, { method: "DELETE", headers });
+}
+
 export async function streamChatMessage(
   sessionId: string,
   message: string,

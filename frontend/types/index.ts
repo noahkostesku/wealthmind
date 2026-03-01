@@ -250,6 +250,7 @@ export interface MonitorAlertData {
   created_at: string;
 }
 
+
 // ─── Legacy profile type (backward compat with existing components) ───────────
 export interface FinancialProfile {
   client: {

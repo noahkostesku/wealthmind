@@ -144,19 +144,22 @@ _AGENT_DESCRIPTIONS: dict[str, str] = {
 
 # After any source agent runs, evaluate these candidate agents
 CROSS_REFERRAL_MAP: dict[str, list[str]] = {
-    "allocation": ["timing", "rate_arbitrage"],
-    "tax_implications": ["tlh", "timing"],
-    "tlh": ["tax_implications", "timing"],
-    "rate_arbitrage": ["allocation"],
-    "timing": ["allocation", "tax_implications"],
-    "direct_response": ["allocation", "tax_implications", "tlh", "rate_arbitrage", "timing"],
+    "allocation": ["timing"],
+    "tax_implications": ["tlh"],
+    "tlh": ["tax_implications"],
+    "rate_arbitrage": [],
+    "timing": ["allocation"],
+    "direct_response": [],
 }
 
 _CROSS_REFERRAL_CHECK_PROMPT = (
     "Given the user's question, the agent findings shown, and the response already given, "
     "would invoking the {agent} agent ({description}) add meaningful NEW value for the user right now? "
-    "Only say yes if there is a clear, specific connection — not on general principle. "
-    "If findings are empty or the question is a greeting/small-talk, always say no.\n\n"
+    "CRITICAL: Only say yes if the user EXPLICITLY asked a question that requires this agent's domain. "
+    "Do NOT refer if the primary response already answered the question adequately. "
+    "Do NOT refer just because there might be tangentially related information. "
+    "The user should never receive information they did not ask for. "
+    "If findings are empty, the question is a greeting/small-talk, or the primary response is sufficient, always say no.\n\n"
     "Return ONLY valid JSON: {{\"refer\": true/false, \"reason\": \"one sentence\"}}"
 )
 

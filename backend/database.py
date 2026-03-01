@@ -152,6 +152,7 @@ class AdvisorCache(Base):
     )
 
 
+
 class MonitorAlert(Base):
     __tablename__ = "monitor_alerts"
 

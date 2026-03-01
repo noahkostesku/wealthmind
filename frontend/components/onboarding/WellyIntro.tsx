@@ -7,14 +7,13 @@
  *   <WellyIntro skipped={false} onComplete={(chips) => ...} />
  *
  * Props:
- *   skipped   — if true, jump straight to Message 3 (live proactive briefing)
+ *   skipped   — if true, skip intro messages and go straight to ready state
  *   onComplete — called with the follow-up chips once the sequence finishes
  *   onAddMessage — callback to inject messages into the parent chat
  */
 
 import { useEffect, useRef } from "react";
 import { createChatSession } from "@/lib/api";
-import type { ChatSession } from "@/types";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -44,6 +43,14 @@ export const AGENT_CAPABILITIES = [
   { agent: "Timing",     desc: "surfaces deadlines before they pass" },
 ];
 
+// ─── Default suggestion chips ────────────────────────────────────────────────
+
+const DEFAULT_CHIPS = [
+  "What's my biggest tax risk right now?",
+  "Should I pay down my margin or invest?",
+  "What contribution room do I have left?",
+];
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function WellyIntro({ skipped, onAddMessage, onSetChips }: WellyIntroProps) {
@@ -54,6 +61,13 @@ export function WellyIntro({ skipped, onAddMessage, onSetChips }: WellyIntroProp
     ran.current = true;
 
     async function run() {
+      // Pre-create the session so it's ready when the user sends their first message
+      try {
+        await createChatSession();
+      } catch {
+        // session will be created on first message
+      }
+
       if (!skipped) {
         // Message 1
         onAddMessage({
@@ -71,35 +85,22 @@ export function WellyIntro({ skipped, onAddMessage, onSetChips }: WellyIntroProp
           isCapabilityList: true,
         });
 
-        await delay(800);
-      }
+        await delay(600);
 
-      // Message 3 — live proactive briefing
-      try {
-        const sess: ChatSession = await createChatSession();
+        // Message 3 — simple invitation to ask, no unsolicited analysis
         onAddMessage({
           id: "welly-intro-3",
-          content: sess.greeting,
-          isProactive: true,
-          agent_sources: sess.agent_sources,
+          content: "Ask me anything about your portfolio and I'll pull in the right agents.",
         });
-
-        // Derive chips from top_findings titles
-        const chips = buildChips(sess);
-        onSetChips(chips);
-      } catch {
+      } else {
+        // Skipped onboarding — just show a simple ready message
         onAddMessage({
           id: "welly-intro-3",
-          content:
-            "I've finished scanning your accounts. Ask me anything to dig in.",
-          isProactive: true,
+          content: "Ask me anything about your portfolio and I'll pull in the right agents.",
         });
-        onSetChips([
-          "What's my biggest tax risk right now?",
-          "Should I pay down my margin or invest?",
-          "What contribution room do I have left?",
-        ]);
       }
+
+      onSetChips(DEFAULT_CHIPS);
     }
 
     run();
@@ -114,22 +115,4 @@ export function WellyIntro({ skipped, onAddMessage, onSetChips }: WellyIntroProp
 
 function delay(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
-}
-
-function buildChips(sess: ChatSession): string[] {
-  const findings = (sess.top_findings ?? []) as Array<{ title?: string }>;
-  const fromFindings = findings
-    .slice(0, 3)
-    .map((f) => f.title)
-    .filter((t): t is string => typeof t === "string" && t.length > 0)
-    .map((t) => `Tell me more about: ${t}`);
-
-  // Fallback chips
-  const fallback = [
-    "What's my biggest tax risk right now?",
-    "Should I pay down my margin or invest?",
-    "What contribution room do I have left?",
-  ];
-
-  return fromFindings.length >= 2 ? fromFindings : fallback;
 }

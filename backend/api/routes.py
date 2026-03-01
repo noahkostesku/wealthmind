@@ -37,6 +37,7 @@ from services.trading import (
     execute_sell,
     execute_withdrawal,
 )
+from services.web_search import web_search, news_search
 
 router = APIRouter()
 
@@ -574,6 +575,27 @@ async def _save_chat_exchange(
 
 
 # ---------------------------------------------------------------------------
+# DELETE /chat/session  (clear conversation)
+# ---------------------------------------------------------------------------
+
+@router.delete("/chat/session")
+async def clear_chat_session(db: AsyncSession = Depends(get_db)):
+    """Delete today's chat session so the next POST /chat/session creates a fresh one."""
+    today = datetime.date.today().isoformat()
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.user_id == _DEMO_USER_ID,
+            Conversation.session_id.like(f"chat-{today}%"),
+        )
+    )
+    existing = result.scalars().first()
+    if existing:
+        await db.delete(existing)
+        await db.commit()
+    return {"cleared": True}
+
+
+# ---------------------------------------------------------------------------
 # POST /chat/session
 # ---------------------------------------------------------------------------
 
@@ -597,9 +619,9 @@ async def create_chat_session(db: AsyncSession = Depends(get_db)):
         stored = existing.last_findings.get("greeting_data", {})
         return {
             "session_id": existing.session_id,
-            "greeting": stored.get("message", "Welcome back to WealthMind."),
-            "top_findings": stored.get("top_findings", []),
-            "agent_sources": stored.get("agent_sources", []),
+            "greeting": stored.get("message", "Welcome back. Ask me anything."),
+            "top_findings": [],
+            "agent_sources": [],
             "restored": True,
         }
 
@@ -646,7 +668,7 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
     Stream a chat response via SSE.
 
     SSE event sequence:
-      routing → agent_start (×N) → agent_complete (×N) → response → follow_ups → done
+      routing → [web_search_start → web_search_complete] → agent_start (×N) → agent_complete (×N) → response → follow_ups → done
     """
     conv_result = await db.execute(
         select(Conversation).where(Conversation.session_id == body.session_id)
@@ -664,7 +686,7 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
         # Chain-protection state — tracks every agent invoked this turn
         turn_agents_invoked: set[str] = set()
         auto_referral_count = 0
-        MAX_AUTO_REFERRALS = 2
+        MAX_AUTO_REFERRALS = 1
 
         try:
             run_id = f"chat-{body.session_id}"
@@ -676,6 +698,8 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
             # ── 1. Route ──────────────────────────────────────────────────
             routing = await conversation_router(body.message, history, last_findings)
             agents_to_invoke = routing.get("agents_to_invoke") or []
+            needs_web_search = routing.get("needs_web_search", False)
+            web_search_query = routing.get("web_search_query") or ""
 
             yield {
                 "event": "routing",
@@ -684,17 +708,63 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                         "agents_to_invoke": agents_to_invoke,
                         "routing_reasoning": routing.get("routing_reasoning", ""),
                         "can_answer_from_context": routing.get("can_answer_from_context", False),
+                        "needs_web_search": needs_web_search,
                     }
                 ),
             }
 
+            # ── 1b. Web search (runs even for direct/context responses) ──
+            search_results: list[dict] = []
+            if needs_web_search and web_search_query:
+                yield {"event": "web_search_start", "data": json.dumps({"query": web_search_query})}
+                try:
+                    # Run both text and news search in parallel, take best results
+                    text_results, news_results = await asyncio.gather(
+                        web_search(web_search_query, max_results=4),
+                        news_search(web_search_query, max_results=3),
+                    )
+                    # Combine and deduplicate by URL
+                    seen_urls: set[str] = set()
+                    for r in news_results + text_results:
+                        if r["url"] not in seen_urls and r["title"]:
+                            search_results.append(r)
+                            seen_urls.add(r["url"])
+                    search_results = search_results[:5]
+                    yield {
+                        "event": "web_search_complete",
+                        "data": json.dumps({
+                            "result_count": len(search_results),
+                            "results": search_results,
+                        }),
+                    }
+                except Exception as exc:
+                    logger.error("Web search failed: %s", exc)
+                    yield {"event": "web_search_complete", "data": json.dumps({"result_count": 0, "results": [], "error": str(exc)})}
+
             # ── 2. Can answer from context / no agents needed ─────────────
             if routing.get("can_answer_from_context") or not agents_to_invoke:
                 direct = routing.get("direct_response") or ""
+                # If we have search results but no agents, synthesize a response that includes search context
+                if search_results and direct:
+                    direct = await synthesize_response(
+                        body.message,
+                        {**last_findings, "web_search_results": search_results},
+                        history,
+                    )
+                elif search_results:
+                    direct = await synthesize_response(
+                        body.message,
+                        {"web_search_results": search_results},
+                        history,
+                    )
                 yield {"event": "response", "data": json.dumps({"text": direct})}
+                if search_results:
+                    yield {"event": "sources", "data": json.dumps({"sources": search_results})}
                 turn_agents_invoked.add("direct_response")
 
                 all_findings = dict(last_findings)
+                if search_results:
+                    all_findings["web_search_results"] = search_results
                 final_response = direct
                 referral_agents_run: list[str] = []
 
@@ -722,7 +792,10 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                         turn_agents_invoked.add(ref_agent)
                         referral_agents_run.append(ref_agent)
                         auto_referral_count += 1
-                        followup_text = await synthesize_response(body.message, ref_findings, history)
+                        ref_synth_findings = dict(ref_findings)
+                        if search_results:
+                            ref_synth_findings["web_search_results"] = search_results
+                        followup_text = await synthesize_response(body.message, ref_synth_findings, history)
                         final_response = followup_text
                         yield {"event": "auto_referral_response", "data": json.dumps({"agent": ref_agent, "text": followup_text})}
                     except Exception as exc:
@@ -777,11 +850,19 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                     }
 
             # ── 5. Synthesise primary response ────────────────────────────
-            response_text = await synthesize_response(body.message, domain_findings, history)
+            # Include web search results in the findings if available
+            synth_findings = dict(domain_findings)
+            if search_results:
+                synth_findings["web_search_results"] = search_results
+            response_text = await synthesize_response(body.message, synth_findings, history)
             yield {"event": "response", "data": json.dumps({"text": response_text})}
+            if search_results:
+                yield {"event": "sources", "data": json.dumps({"sources": search_results})}
 
             # ── 6. Universal cross-referral — runs after every agent response ──
             all_findings = dict(domain_findings)
+            if search_results:
+                all_findings["web_search_results"] = search_results
             final_response = response_text
 
             referrals = await get_cross_referral_candidates(
@@ -806,7 +887,11 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                     all_findings.update(ref_findings)
                     turn_agents_invoked.add(ref_agent)
                     auto_referral_count += 1
-                    followup_text = await synthesize_response(body.message, ref_findings, history)
+                    # Include web search results so the synthesizer doesn't claim they're missing
+                    ref_synth_findings = dict(ref_findings)
+                    if search_results:
+                        ref_synth_findings["web_search_results"] = search_results
+                    followup_text = await synthesize_response(body.message, ref_synth_findings, history)
                     final_response = followup_text
                     yield {"event": "auto_referral_response", "data": json.dumps({"agent": ref_agent, "text": followup_text})}
                 except Exception as exc:
@@ -818,6 +903,8 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
             yield {"event": "follow_ups", "data": json.dumps({"chips": chips})}
 
             saved_sources = [a for a in turn_agents_invoked if a != "direct_response"]
+            if search_results:
+                saved_sources.append("web_search")
             await _save_chat_exchange(conv_id, body.message, final_response, saved_sources, all_findings)
             yield {"event": "done", "data": json.dumps({"session_id": body.session_id})}
 
@@ -1075,6 +1162,7 @@ async def advisor_report(db: AsyncSession = Depends(get_db)):
     """
     from services.advisor import generate_advisor_report
     return await generate_advisor_report(_DEMO_USER_ID, db)
+
 
 
 @router.get("/debug/consistency")
