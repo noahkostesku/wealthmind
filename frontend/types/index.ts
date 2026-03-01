@@ -1,8 +1,200 @@
+// ─── Position ──────────────────────────────────────────────────────────────────
+export interface Position {
+  id: number;
+  ticker: string;
+  name: string;
+  shares: number;
+  avg_cost_cad: number;
+  currency: string;
+  asset_type: string;
+  current_price: number;
+  current_value_cad: number;
+  unrealized_gain_loss_cad: number;
+  unrealized_gain_loss_pct: number;
+  held_days: number;
+  change_pct: number;
+  // Added by /portfolio/positions
+  account_type?: string;
+  account_id?: number;
+  product_name?: string;
+}
+
+// ─── Account ───────────────────────────────────────────────────────────────────
+export interface AccountSummary {
+  id: number;
+  account_type: string;
+  subtype: string | null;
+  product_name: string;
+  balance_cad: number;
+  interest_rate: number | null;
+  contribution_room_remaining: number | null;
+  contribution_deadline: string | null;
+  is_active: boolean;
+}
+
+export interface Account extends AccountSummary {
+  positions: Position[];
+  total_value_cad?: number;
+}
+
+// ─── Portfolio Snapshot ────────────────────────────────────────────────────────
+export interface PortfolioSnapshot {
+  total_value_cad: number;
+  total_gain_loss_cad: number;
+  total_gain_loss_pct: number;
+  accounts: Account[];
+  allocation: {
+    by_account_type: Record<string, number>;
+    by_asset_type: Record<string, number>;
+  };
+  contribution_room: {
+    tfsa: number | null;
+    rrsp: number | null;
+    fhsa: number | null;
+  };
+  margin: {
+    debit_balance: number;
+    interest_rate: number;
+    annual_cost: number;
+  };
+}
+
+export interface PerformanceTimeline {
+  date: string;
+  net_deposits: number;
+  transaction_type: string;
+  amount: number;
+}
+
+export interface PerformanceData {
+  current_value_cad: number;
+  total_gain_loss_cad: number;
+  total_gain_loss_pct: number;
+  timeline: PerformanceTimeline[];
+  tax_exposure: {
+    marginal_rate: number;
+    inclusion_rate: number;
+    positions: Array<{
+      ticker: string;
+      unrealized_gain_cad: number;
+      taxable_gain_cad: number;
+      estimated_tax_cad: number;
+    }>;
+    total_taxable_gain_cad: number;
+    total_estimated_tax_cad: number;
+  };
+}
+
+// ─── Position History ──────────────────────────────────────────────────────────
+export interface PriceBar {
+  date: string;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+}
+
+export interface PositionHistory {
+  ticker: string;
+  period: string;
+  price_chart: PriceBar[];
+  cost_basis_line: Array<{ date: string; cost_basis: number | null }>;
+  transactions: Array<{
+    executed_at: string;
+    transaction_type: string;
+    shares: number;
+    price_cad: number;
+    total_cad: number;
+  }>;
+}
+
+// ─── Transaction ───────────────────────────────────────────────────────────────
+export interface Transaction {
+  id: number;
+  account_id: number;
+  transaction_type: string;
+  ticker: string | null;
+  shares: number | null;
+  price_cad: number | null;
+  total_cad: number;
+  currency_from: string | null;
+  currency_to: string | null;
+  exchange_rate: number | null;
+  executed_at: string;
+  notes: string | null;
+}
+
+// ─── Market Data ───────────────────────────────────────────────────────────────
+export interface StockResult {
+  ticker: string;
+  name: string;
+  exchange: string;
+  price: number;
+  cad_price?: number;
+  change: number;
+  change_pct: number;
+  currency: string;
+}
+
+export interface QuoteResponse {
+  quote: {
+    ticker?: string;
+    name?: string;
+    price?: number;
+    cad_price?: number;
+    change_pct?: number;
+    currency?: string;
+  };
+  chart_1d: PriceBar[];
+}
+
+// ─── Trading ───────────────────────────────────────────────────────────────────
+export interface TradeResult {
+  success?: boolean;
+  transaction_id?: number;
+  ticker?: string;
+  shares?: number;
+  price?: number;
+  total?: number;
+  account_id?: number;
+  message?: string;
+  detail?: string;
+}
+
+export interface ExchangeResult {
+  success?: boolean;
+  from_amount?: number;
+  to_amount?: number;
+  rate?: number;
+  transaction_id?: number;
+  message?: string;
+  detail?: string;
+}
+
+// ─── Chat ──────────────────────────────────────────────────────────────────────
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+  agent_sources?: string[];
+  findings_snapshot?: Record<string, unknown>;
+}
+
+export interface ChatSession {
+  session_id: string;
+  greeting: string;
+  top_findings: Insight[];
+  agent_sources: string[];
+  restored?: boolean;
+}
+
+// ─── Insights ─────────────────────────────────────────────────────────────────
 export interface Insight {
-  id: string;
-  run_id: string;
-  user_id: string;
-  domain: string;
+  id?: string;
+  run_id?: string;
+  user_id?: string;
+  domain?: string;
   title: string;
   dollar_impact: number;
   impact_direction: "save" | "earn" | "avoid";
@@ -10,7 +202,7 @@ export interface Insight {
   reasoning: string;
   confidence: "high" | "medium" | "low";
   what_to_do: string;
-  status: string;
+  status?: string;
   dismissed_at?: string;
   dismiss_reason?: string;
 }
@@ -22,6 +214,12 @@ export interface AnalysisRun {
   insights: Insight[];
 }
 
+export interface AgentStatus {
+  name: string;
+  status: "idle" | "running" | "complete" | "error";
+}
+
+// ─── Legacy profile type (backward compat with existing components) ───────────
 export interface FinancialProfile {
   client: {
     age: number;
@@ -32,89 +230,6 @@ export interface FinancialProfile {
     total_assets_with_ws: number;
     member_since: string;
   };
-  accounts: {
-    chequing: {
-      type: string;
-      balance: number;
-      interest_rate: number;
-      product_name: string;
-    };
-    tfsa_managed: {
-      type: string;
-      subtype: string;
-      portfolio: string;
-      balance: number;
-      contribution_room_remaining: number;
-      annual_limit_2024: number;
-      cumulative_room_if_eligible_since_2009: number;
-      product_name: string;
-    };
-    rrsp_self_directed: {
-      type: string;
-      subtype: string;
-      balance: number;
-      contribution_room_remaining: number;
-      contribution_deadline: string;
-      product_name: string;
-      positions: Array<{
-        ticker: string;
-        shares: number;
-        avg_cost: number;
-        current_price: number;
-        unrealized_gain: number;
-      }>;
-    };
-    non_registered_self_directed: {
-      type: string;
-      subtype: string;
-      product_name: string;
-      balance_cash: number;
-      positions: Array<{
-        ticker: string;
-        shares: number;
-        avg_cost: number;
-        current_price: number;
-        unrealized_gain?: number;
-        unrealized_loss?: number;
-        held_days: number;
-      }>;
-    };
-    fhsa: {
-      type: string;
-      exists: boolean;
-      eligible: boolean;
-      annual_contribution_limit: number;
-      lifetime_limit: number;
-      note: string;
-    };
-    margin: {
-      type: string;
-      debit_balance: number;
-      interest_rate: number;
-      product_name: string;
-    };
-    crypto: {
-      type: string;
-      product_name: string;
-      balance_cad: number;
-      positions: Array<{
-        asset: string;
-        balance_cad: number;
-        unrealized_gain_cad?: number;
-        unrealized_loss_cad?: number;
-      }>;
-    };
-  };
-  tax_profile: {
-    federal_bracket: string;
-    provincial_bracket_on: string;
-    marginal_rate_combined: string;
-    capital_gains_inclusion_rate: number;
-    rrsp_deduction_value_per_dollar: number;
-  };
-}
-
-export interface AgentStatus {
-  name: string;
-  status: "idle" | "running" | "complete" | "error";
+  accounts: Record<string, unknown>;
+  tax_profile: Record<string, unknown>;
 }

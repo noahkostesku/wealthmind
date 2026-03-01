@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from api.routes import router
-from database import create_tables
+from database import create_tables, seed_demo_user
 
 load_dotenv()
 
@@ -99,6 +99,8 @@ class JWTMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     await create_tables()
     logger.info("Database tables created / verified.")
+    await seed_demo_user()
+    logger.info("Demo user seeded / already exists.")
     yield
 
 

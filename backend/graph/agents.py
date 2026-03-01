@@ -23,6 +23,8 @@ def _load_prompt(name: str) -> str:
 
 
 def _build_user_message(state: GraphState) -> str:
+    # financial_profile is populated by get_portfolio_snapshot() in routes.py,
+    # providing live prices and real balances from the database.
     return json.dumps(
         {
             "financial_profile": state["financial_profile"],
