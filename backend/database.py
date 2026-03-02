@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, delete, select
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -180,24 +180,38 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def seed_demo_user() -> None:
-    """Create demo user with all accounts and positions if no users exist."""
+    """
+    Create or reset demo user to clean seed state.
+
+    Always drops and recreates all accounts and positions for the demo user
+    so that the live DB never drifts from the authoritative demo_profile.json
+    values. Safe to call repeatedly — the User row is preserved if it exists.
+    """
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User))
-        existing = result.scalar_one_or_none()
-        if existing:
-            return
+        # Find or create the demo user
+        result = await session.execute(
+            select(User).where(User.google_id == "demo_google_id")
+        )
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            user = User(
+                google_id="demo_google_id",
+                email="demo@wealthmind.ca",
+                wealthsimple_tier="premium",
+            )
+            session.add(user)
+            await session.flush()
+
+        user_id = user.id
+
+        # Drop all existing positions and accounts so reseed is idempotent
+        await session.execute(delete(Position).where(Position.user_id == user_id))
+        await session.execute(delete(Account).where(Account.user_id == user_id))
+        await session.flush()
 
         profile = json.loads(_DEMO_PROFILE.read_text())
         accts = profile["accounts"]
-
-        user = User(
-            google_id="demo_google_id",
-            email="demo@wealthmind.ca",
-            wealthsimple_tier="premium",
-        )
-        session.add(user)
-        await session.flush()
-        user_id = user.id
 
         # Chequing
         chequing = Account(
@@ -211,26 +225,26 @@ async def seed_demo_user() -> None:
         )
         session.add(chequing)
 
-        # TFSA Managed
+        # TFSA Managed — contribution room always reset to seed value
         tfsa = Account(
             user_id=user_id,
             account_type="tfsa",
             subtype="managed",
             product_name="Wealthsimple Managed TFSA",
             balance_cad=accts["tfsa_managed"]["balance"],
-            contribution_room_remaining=accts["tfsa_managed"]["contribution_room_remaining"],
+            contribution_room_remaining=7000.0,
             is_active=True,
         )
         session.add(tfsa)
 
-        # RRSP Self-directed
+        # RRSP Self-directed — contribution room always reset to seed value
         rrsp = Account(
             user_id=user_id,
             account_type="rrsp",
             subtype="self_directed",
             product_name="Wealthsimple Self-Directed RRSP",
             balance_cad=accts["rrsp_self_directed"]["balance"],
-            contribution_room_remaining=accts["rrsp_self_directed"]["contribution_room_remaining"],
+            contribution_room_remaining=14500.0,
             contribution_deadline=accts["rrsp_self_directed"]["contribution_deadline"],
             is_active=True,
         )
@@ -275,25 +289,27 @@ async def seed_demo_user() -> None:
                 asset_type=_nr_types.get(p["ticker"], "stock"),
             ))
 
-        # FHSA (not yet opened — is_active=False)
+        # FHSA — not yet opened (is_active=False) but contribution_room_remaining
+        # is always explicitly set to 8000 so agents can surface the opportunity
         session.add(Account(
             user_id=user_id,
             account_type="fhsa",
             subtype=None,
             product_name="Wealthsimple FHSA",
             balance_cad=0.0,
-            contribution_room_remaining=float(accts["fhsa"]["annual_contribution_limit"]),
+            contribution_room_remaining=8000.0,
             is_active=False,
         ))
 
-        # Margin (negative balance = debit owed)
+        # Margin — debit_balance and interest_rate always seeded explicitly;
+        # balance_cad is negative (debit owed), interest_rate is never null
         session.add(Account(
             user_id=user_id,
             account_type="margin",
             subtype=None,
             product_name="Wealthsimple Margin",
-            balance_cad=-float(accts["margin"]["debit_balance"]),
-            interest_rate=accts["margin"]["interest_rate"],
+            balance_cad=-11200.0,
+            interest_rate=0.062,
             is_active=True,
         ))
 
@@ -309,12 +325,10 @@ async def seed_demo_user() -> None:
         session.add(crypto_acct)
         await session.flush()
 
-        # Crypto positions — approximate shares at seed time
-        # BTC at ~$140k CAD: 0.015 BTC = $2,100 CAD (gain of $340 = cost $1,760 → avg $117,333)
-        # ETH at ~$4,200 CAD: 0.27 ETH = $1,134 CAD (loss of $85 = cost $1,185 → avg $4,389)
+        # Crypto positions — avg_cost_cad sourced from demo_profile.json
         for ticker, name, shares, avg_cost in [
-            ("BTC-CAD", "Bitcoin", 0.015, 117333.33),
-            ("ETH-CAD", "Ethereum", 0.27, 4388.89),
+            ("BTC-CAD", "Bitcoin", 0.015, 104841.91),
+            ("ETH-CAD", "Ethereum", 0.27, 3342.53),
         ]:
             session.add(Position(
                 account_id=crypto_acct.id,

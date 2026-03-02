@@ -78,6 +78,17 @@ async def tlh_agent(state: GraphState) -> dict:
 
 
 async def rate_arbitrage_agent(state: GraphState) -> dict:
+    # Guard: if margin data is missing, zero, or interest_rate is null,
+    # return empty findings rather than passing bad data to the LLM.
+    profile = state.get("financial_profile") or {}
+    margin = profile.get("margin") or {}
+    debit = margin.get("debit_balance") or 0
+    rate = margin.get("interest_rate")
+    if not debit or not rate:
+        logger.info("rate_arbitrage_agent: no margin debit/rate — skipping")
+        current = state.get("domain_findings") or {}
+        current["rates"] = []
+        return {"domain_findings": current}
     return await _call_agent("rate_arbitrage.txt", state, "rates")
 
 

@@ -135,6 +135,12 @@ async def get_portfolio_snapshot(user_id: int, db: AsyncSession) -> dict:
     # Contribution room helpers
     def _room(acct_type: str) -> float | None:
         acct = next((a for a in accounts if a.account_type == acct_type), None)
+        if acct_type == "fhsa":
+            # FHSA may not be opened yet — always return room so agents can
+            # surface the opportunity. Fall back to 8000 (annual limit) if
+            # the account doesn't exist or the room field is NULL.
+            if acct is None or acct.contribution_room_remaining is None:
+                return 8000.0
         return acct.contribution_room_remaining if acct else None
 
     # Margin summary

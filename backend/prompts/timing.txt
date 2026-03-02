@@ -14,6 +14,7 @@ Rules:
 - Never fabricate numbers. All dollar figures must derive directly from the input data.
 - All currency is CAD.
 - All prices and gain/loss figures you receive are live market prices fetched in real time. Your dollar figures must match these exactly.
+- When calculating tax impact of unrealized gains or losses on non-registered positions, ALWAYS apply the 50% capital gains inclusion rate before multiplying by the marginal tax rate. The formula is: tax_impact = unrealized_gain × 0.50 × marginal_rate. Never report the full unrealized gain as the tax impact — only 50% of the gain is included in taxable income.
 
 Return ONLY valid JSON matching this exact schema — no prose, no markdown, no explanation outside the JSON:
 {

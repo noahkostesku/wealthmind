@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from database import Account, AdvisorCache, AsyncSessionLocal, Conversation, MonitorAlert, Position, Transaction, User, get_db
+from database import Account, AdvisorCache, AsyncSessionLocal, Conversation, MonitorAlert, Position, Transaction, User, get_db, seed_demo_user
 from graph.agents import (
     allocation_agent,
     rate_arbitrage_agent,
@@ -1331,6 +1331,29 @@ async def debug_consistency(db: AsyncSession = Depends(get_db)):
         "negative_balances_found": len(negative_balances),
         "accounts_checked": len(accounts),
         "negative_balance_accounts": negative_balances,
+    }
+
+
+@router.post("/debug/reseed")
+async def debug_reseed():
+    """
+    Reset demo user accounts and positions to clean seed state.
+
+    Drops and recreates all accounts and positions for the demo user,
+    restoring original balances, contribution rooms, avg costs, margin
+    debit balance, and interest rate from demo_profile.json.
+    """
+    await seed_demo_user()
+    return {
+        "status": "ok",
+        "message": "Demo user reseeded to clean state",
+        "seed_values": {
+            "tfsa_contribution_room": 7000,
+            "rrsp_contribution_room": 14500,
+            "fhsa_contribution_room": 8000,
+            "margin_debit_balance": 11200,
+            "margin_interest_rate": 0.062,
+        },
     }
 
 
