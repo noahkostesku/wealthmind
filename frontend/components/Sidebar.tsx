@@ -30,7 +30,11 @@ export function Sidebar({ wellyOpen, onToggleWelly }: SidebarProps) {
   const pathname = usePathname();
   const { data: session } = useSession();
   const email = session?.user?.email ?? "";
-  const initials = email.slice(0, 2).toUpperCase() || "WM";
+  const name = session?.user?.name ?? "";
+  const image = session?.user?.image ?? "";
+  const initials = name
+    ? name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)
+    : email.slice(0, 2).toUpperCase() || "WM";
 
   return (
     <aside className="flex flex-col h-full bg-white border-r border-[#E5E5E5]">
@@ -86,16 +90,30 @@ export function Sidebar({ wellyOpen, onToggleWelly }: SidebarProps) {
       {/* User */}
       <div className="px-3 py-4 border-t border-[#E5E5E5] flex-shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-full bg-[#111827] flex items-center justify-center flex-shrink-0">
-            <span className="text-[10px] font-semibold text-white">
-              {initials}
-            </span>
+          {image ? (
+            <img
+              src={image}
+              alt={name || email}
+              className="w-7 h-7 rounded-full flex-shrink-0 object-cover"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="w-7 h-7 rounded-full bg-[#111827] flex items-center justify-center flex-shrink-0">
+              <span className="text-[10px] font-semibold text-white">
+                {initials}
+              </span>
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            {name && (
+              <p className="text-xs font-medium text-[#111827] truncate">{name}</p>
+            )}
+            <p className="text-[11px] text-[#9CA3AF] truncate">{email}</p>
           </div>
-          <p className="flex-1 text-xs text-[#111827] truncate">{email}</p>
           <button
             onClick={() => signOut({ callbackUrl: "/login" })}
             title="Sign out"
-            className="text-[#6B7280] hover:text-[#111827] transition-colors p-1 rounded"
+            className="text-[#6B7280] hover:text-[#111827] transition-colors p-1 rounded flex-shrink-0"
           >
             <LogOut className="w-3.5 h-3.5" />
           </button>

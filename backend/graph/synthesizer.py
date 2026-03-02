@@ -134,6 +134,50 @@ async def synthesize_response(
         return "I encountered an issue analysing your request. Please try again."
 
 
+async def stream_synthesize_response(
+    user_message: str,
+    findings: dict,
+    history: list[dict],
+    repeat_question: bool = False,
+    previous_findings: dict | None = None,
+):
+    """
+    Async generator that yields synthesis response text chunks as the LLM streams them.
+    Use this in SSE routes to start sending text to the client before the full response is ready.
+    """
+    system_prompt = _load_prompt("response_synthesizer.txt")
+    recent_history = history[-6:] if len(history) > 6 else history
+
+    data_changed: bool | None = None
+    if repeat_question:
+        data_changed = _findings_changed(findings, previous_findings)
+
+    user_content = json.dumps(
+        {
+            "user_message": user_message,
+            "agent_findings": findings,
+            "recent_history": recent_history,
+            "repeat_question": repeat_question,
+            "data_changed_since_last_answer": data_changed,
+        },
+        indent=2,
+    )
+
+    llm = ChatAnthropic(model=_MODEL, max_tokens=1024)
+    try:
+        async for chunk in llm.astream(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_content),
+            ]
+        ):
+            if chunk.content:
+                yield chunk.content
+    except Exception as exc:
+        logger.error("Streaming synthesizer failed: %s", exc)
+        yield "I encountered an issue analysing your request. Please try again."
+
+
 _AGENT_DESCRIPTIONS: dict[str, str] = {
     "allocation": "TFSA/RRSP/FHSA contribution room, cash placement, registered account gaps",
     "tax_implications": "tax consequences of trades, capital gains, selling decisions",

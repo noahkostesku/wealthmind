@@ -51,7 +51,11 @@ async def web_search(query: str, max_results: int = 5) -> list[SearchResult]:
             logger.error("DuckDuckGo search failed: %s", exc)
             return []
 
-    return await asyncio.to_thread(_sync_search)
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_sync_search), timeout=4.0)
+    except asyncio.TimeoutError:
+        logger.warning("web_search timed out after 4s for query: %s", query)
+        return []
 
 
 async def news_search(query: str, max_results: int = 5) -> list[SearchResult]:
@@ -81,4 +85,8 @@ async def news_search(query: str, max_results: int = 5) -> list[SearchResult]:
             logger.error("DuckDuckGo news search failed: %s", exc)
             return []
 
-    return await asyncio.to_thread(_sync_search)
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_sync_search), timeout=4.0)
+    except asyncio.TimeoutError:
+        logger.warning("news_search timed out after 4s for query: %s", query)
+        return []

@@ -70,6 +70,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   // ── Monitor alerts ────────────────────────────────────────────────────────
   const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlertData[]>([]);
+  // Live alerts: only from WebSocket (injected into chat). Initial fetch is badge-only.
+  const [liveAlerts, setLiveAlerts] = useState<MonitorAlertData[]>([]);
   const [unreadAlertCount, setUnreadAlertCount] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -129,6 +131,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             if (prev.some((a) => a.id === alert.id)) return prev;
             return [...prev, alert];
           });
+          // Live alerts go to chat — only WebSocket arrivals, not initial fetch
+          setLiveAlerts((prev) => {
+            if (prev.some((a) => a.id === alert.id)) return prev;
+            return [...prev, alert];
+          });
           // Increment unread badge when panel is collapsed
           if (!wellyExpanded) {
             setUnreadAlertCount((n) => n + 1);
@@ -176,6 +183,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   if (isPublic || status === "loading" || !session) {
     return <div className="min-h-screen bg-[#FAFAFA]">{children}</div>;
+  }
+
+  // Wait for onboarding check before rendering the full app layout.
+  // Prevents: (a) flash of main app before IntroScreen, and
+  // (b) ChatPanel mounting early and creating a session with ghost messages.
+  if (phase === "idle") {
+    return <div className="min-h-screen bg-[#FAFAFA]" />;
   }
 
   const onboardingInProgress = phase === "intro" || phase === "welly";
@@ -266,7 +280,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 onboardingMessages={onboardingMessages.length > 0 ? onboardingMessages : undefined}
                 onboardingChips={onboardingChips.length > 0 ? onboardingChips : undefined}
                 onboardingInProgress={onboardingInProgress}
-                monitorAlerts={monitorAlerts.length > 0 ? monitorAlerts : undefined}
+                monitorAlerts={liveAlerts.length > 0 ? liveAlerts : undefined}
                 unreadAlertCount={unreadAlertCount}
                 onBellClick={() => {
                   setWellyExpanded(true);

@@ -526,7 +526,7 @@ export default function DashboardPage() {
                         {cad(room)} remaining
                       </span>
                       {urgent && (
-                        <span className="text-xs font-medium text-[#D97706] bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                        <span className="text-xs font-medium text-[#D97706] border border-amber-200 px-2 py-0.5 rounded-full">
                           Due in {daysLeft}d
                         </span>
                       )}
@@ -543,7 +543,7 @@ export default function DashboardPage() {
             })}
 
             {fhsaNotOpened && (
-              <div className="flex items-center justify-between px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+              <div className="flex items-center justify-between px-4 py-3 border border-amber-200 rounded-xl">
                 <div>
                   <p className="text-sm font-medium text-amber-800">
                     FHSA — Not opened

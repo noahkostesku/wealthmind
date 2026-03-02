@@ -114,7 +114,7 @@ async def get_portfolio_snapshot(user_id: int, db: AsyncSession) -> dict:
                 by_account_type.get(acct.account_type, 0.0) + acct_total
             )
 
-        accounts_data.append({
+        acct_data = {
             "id": acct.id,
             "account_type": acct.account_type,
             "subtype": acct.subtype,
@@ -126,7 +126,12 @@ async def get_portfolio_snapshot(user_id: int, db: AsyncSession) -> dict:
             "contribution_deadline": acct.contribution_deadline,
             "is_active": acct.is_active,
             "positions": positions_data,
-        })
+        }
+        # Mark unopened accounts explicitly so router/synthesizer never says
+        # "you already have one open" when the account was never funded.
+        if not acct.is_active:
+            acct_data["status"] = "not_opened"
+        accounts_data.append(acct_data)
 
     # Gain/loss is the sum of unrealized gains on positions only — cash is NOT a gain
     total_gl = total_unrealized_gl

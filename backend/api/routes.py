@@ -26,7 +26,7 @@ from graph.graph import compile_graph
 from graph.proactive import generate_proactive_greeting
 from graph.router import conversation_router
 from graph.state import GraphState
-from graph.synthesizer import generate_follow_up_chips, get_cross_referral_candidates, synthesize_response
+from graph.synthesizer import generate_follow_up_chips, get_cross_referral_candidates, synthesize_response, stream_synthesize_response
 from services.portfolio import calculate_tax_exposure, get_portfolio_snapshot, get_position_history
 from services.prices import get_current_price, get_price_history, get_usdcad_rate, search_stocks
 from services.trading import (
@@ -856,13 +856,19 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                         "data": json.dumps({"agent": domain, "finding_count": count}),
                     }
 
-            # ── 5. Synthesise primary response ────────────────────────────
+            # ── 5. Synthesise primary response (streaming) ────────────────
             # Include web search results in the findings if available
             synth_findings = dict(domain_findings)
             if search_results:
                 synth_findings["web_search_results"] = search_results
-            response_text = await synthesize_response(body.message, synth_findings, history)
-            yield {"event": "response", "data": json.dumps({"text": response_text})}
+            # Stream chunks as they arrive — client sees text immediately
+            response_parts: list[str] = []
+            async for chunk in stream_synthesize_response(body.message, synth_findings, history):
+                response_parts.append(chunk)
+                yield {"event": "response_chunk", "data": json.dumps({"chunk": chunk})}
+            response_text = "".join(response_parts)
+            # Signal streaming complete; text is already rendered by chunks
+            yield {"event": "response", "data": json.dumps({"text": ""})}
             if search_results:
                 yield {"event": "sources", "data": json.dumps({"sources": search_results})}
 

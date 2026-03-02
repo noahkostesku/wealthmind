@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -14,6 +15,30 @@ _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _MODEL = "claude-sonnet-4-6"
 
 _ALL_AGENTS = ["allocation", "tax_implications", "tlh", "rate_arbitrage", "timing"]
+
+# Patterns that indicate a question is about the user's own portfolio — never web search these
+_PORTFOLIO_POSSESSIVE = re.compile(
+    r"\b(my |i have|i own|i hold|i'm holding|should i sell|should i buy|should i|i invested|i bought|i sold)\b",
+    re.IGNORECASE,
+)
+_TICKER_PATTERN = re.compile(r"\b[A-Z]{1,5}(?:\.TO)?\b")
+_DOLLAR_PATTERN = re.compile(r"\$\d|\b\d+%")
+
+
+def _is_portfolio_specific(message: str) -> bool:
+    """
+    Return True if the message is clearly about the user's own portfolio data.
+    These questions must NEVER trigger web search.
+    """
+    if _PORTFOLIO_POSSESSIVE.search(message):
+        return True
+    if _DOLLAR_PATTERN.search(message):
+        return True
+    # Only match tickers when combined with portfolio language in the broader message
+    # (avoid false positive on purely educational ticker questions like "what is SHOP?")
+    if _TICKER_PATTERN.search(message) and re.search(r"\b(sell|buy|hold|gain|loss|position|shares|worth|return)\b", message, re.IGNORECASE):
+        return True
+    return False
 
 
 def _load_prompt(name: str) -> str:
@@ -108,6 +133,8 @@ async def conversation_router(
                     "balance_cad": a.get("balance_cad"),
                     "total_value_cad": a.get("total_value_cad"),
                     "contribution_room_remaining": a.get("contribution_room_remaining"),
+                    "is_active": a.get("is_active", True),
+                    **({"status": a["status"]} if "status" in a else {}),
                 }
                 for a in portfolio_snapshot.get("accounts", [])
             ],
@@ -144,6 +171,13 @@ async def conversation_router(
         # Normalise key name in case model uses old "reasoning" field
         if "reasoning" in result and "routing_reasoning" not in result:
             result["routing_reasoning"] = result.pop("reasoning")
+
+        # Post-processing override: never web search for portfolio-specific questions
+        if result.get("needs_web_search") and _is_portfolio_specific(message):
+            result["needs_web_search"] = False
+            result["web_search_query"] = None
+            logger.info("[ROUTER] Overriding needs_web_search=False — portfolio-specific question detected")
+
         result["repeat_question"] = repeat_question
         logger.info(
             "[ROUTER] agents=%s | web_search=%s | can_answer=%s | reasoning=%s",

@@ -458,18 +458,15 @@ function AccountCard({
   // FHSA not opened
   if (isFhsaInactive) {
     return (
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 flex flex-col gap-3">
+      <div className="border border-amber-200 rounded-xl p-5 flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center">
-              <AlertTriangle className="w-4 h-4 text-amber-600" />
-            </div>
             <div>
               <p className="text-sm font-semibold text-amber-800">FHSA</p>
               <p className="text-xs text-amber-600">Not opened</p>
             </div>
           </div>
-          <span className="text-xs font-medium px-2 py-1 bg-amber-200 text-amber-800 rounded-full">
+          <span className="text-xs font-medium px-2 py-1 border border-amber-200 text-amber-800 rounded-full">
             Eligible
           </span>
         </div>
@@ -493,29 +490,21 @@ function AccountCard({
     <div className="bg-white border border-[#E5E5E5] rounded-xl p-5 shadow-sm flex flex-col gap-4">
       {/* Header */}
       <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center"
-            style={{ backgroundColor: `${meta.color}15` }}
-          >
-            <Icon className="w-4 h-4" style={{ color: meta.color }} />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-[#111827]">
-              {stripBrand(account.product_name)}
-            </p>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              {account.subtype && (
-                <span className="text-[10px] font-medium px-1.5 py-0.5 bg-zinc-100 text-[#6B7280] rounded-full uppercase">
-                  {account.subtype.replace("_", " ")}
-                </span>
-              )}
-              {!account.is_active && (
-                <span className="text-[10px] font-medium px-1.5 py-0.5 bg-zinc-100 text-[#9CA3AF] rounded-full">
-                  Inactive
-                </span>
-              )}
-            </div>
+        <div>
+          <p className="text-sm font-semibold text-[#111827]">
+            {stripBrand(account.product_name)}
+          </p>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {account.subtype && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 bg-zinc-100 text-[#6B7280] rounded-full uppercase">
+                {account.subtype.replace("_", " ")}
+              </span>
+            )}
+            {!account.is_active && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 bg-zinc-100 text-[#9CA3AF] rounded-full">
+                Inactive
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -706,7 +695,7 @@ export default function AccountsPage() {
 
       {/* Margin summary banner */}
       {portfolio?.margin && portfolio.margin.debit_balance > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-4 flex items-center justify-between">
+        <div className="border border-red-200 rounded-xl px-5 py-4 flex items-center justify-between">
           <div>
             <p className="text-sm font-semibold text-[#DC2626]">
               Margin debit: {cad(portfolio.margin.debit_balance)}

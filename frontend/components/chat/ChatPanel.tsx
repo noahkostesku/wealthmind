@@ -467,6 +467,8 @@ export function ChatPanel({
   const messagesRef = useRef<UIMessage[]>([]);
   // Alert IDs we've already sent an auto-dismiss call for (fire-once per alert)
   const autoDismissedRef = useRef<Set<number>>(new Set());
+  // Tracks whether response_chunk events were received for the current message turn
+  const chunksReceivedRef = useRef(false);
 
   // Normal session init — skipped if onboarding is active or if onboarding messages
   // were injected (WellyIntro already created the session for Message 3)
@@ -658,13 +660,40 @@ export function ChatPanel({
       setThinkingFading(false);
       pendingChipsRef.current = null;
       animatingRef.current = false;
+      chunksReceivedRef.current = false;
       currentResponseIdRef.current = asstId;
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
 
       try {
         await streamChatMessage(activeSession.session_id, text.trim(), (ev) => {
+          // FIX 1: log every SSE event for debugging
+          console.log("[Welly SSE]", ev.type, ev);
+
           if (ev.type === "routing") {
             // routing event — no header update needed
+          } else if (ev.type === "response_chunk") {
+            // FIX 8: streaming chunk — append directly without animation
+            const chunk = ev.chunk as string;
+            if (!chunksReceivedRef.current) {
+              // First chunk: fade agent orbs immediately
+              chunksReceivedRef.current = true;
+              setThinkingFading(true);
+              setMessages((prev) =>
+                prev.map((m) => (m.type === "orb" ? { ...m, fading: true } : m))
+              );
+              if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+              fadeTimerRef.current = setTimeout(() => {
+                setMessages((prev) => prev.filter((m) => m.type !== "orb"));
+                setThinkingFading(false);
+              }, 300);
+            }
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === asstId
+                  ? { ...m, content: (m.content || "") + chunk, streaming: true }
+                  : m
+              )
+            );
           } else if (ev.type === "web_search_start") {
             // Show a search orb in the message stream
             const searchOrbId = `orb-web_search-${Date.now()}`;
@@ -726,52 +755,74 @@ export function ChatPanel({
               )
             );
           } else if (ev.type === "response") {
-            setThinkingFading(true);
-            setMessages((prev) =>
-              prev.map((m) => (m.type === "orb" ? { ...m, fading: true } : m))
-            );
-            fadeTimerRef.current = setTimeout(() => {
-              setMessages((prev) => prev.filter((m) => m.type !== "orb"));
-              setThinkingFading(false);
-            }, 300);
-
-            const fullText = ev.text as string;
-            pendingChipsRef.current = null;
-            animatingRef.current = true;
-            // Primary response always targets asstId
-            currentResponseIdRef.current = asstId;
-
-            const charsPerFrame = Math.max(2, Math.ceil(fullText.length / 90));
-            let pos = 0;
-
-            const tick = () => {
-              pos = Math.min(pos + charsPerFrame, fullText.length);
-              const partial = fullText.slice(0, pos);
-              const done = pos >= fullText.length;
-
+            if (chunksReceivedRef.current) {
+              // FIX 8: chunks already streamed — just finalise the message, no re-animation
+              chunksReceivedRef.current = false;
+              animatingRef.current = false;
+              currentResponseIdRef.current = asstId;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === asstId
                     ? {
                         ...m,
-                        content: partial,
-                        streaming: !done,
-                        ...(done && pendingChipsRef.current
+                        streaming: false,
+                        ...(pendingChipsRef.current
                           ? { follow_up_chips: pendingChipsRef.current }
                           : {}),
                       }
                     : m
                 )
               );
+              pendingChipsRef.current = null;
+            } else {
+              // Direct response path (no chunks) — fade orbs then animate text
+              setThinkingFading(true);
+              setMessages((prev) =>
+                prev.map((m) => (m.type === "orb" ? { ...m, fading: true } : m))
+              );
+              fadeTimerRef.current = setTimeout(() => {
+                setMessages((prev) => prev.filter((m) => m.type !== "orb"));
+                setThinkingFading(false);
+              }, 300);
 
-              if (!done) {
-                requestAnimationFrame(tick);
-              } else {
-                animatingRef.current = false;
-              }
-            };
+              const fullText = ev.text as string;
+              pendingChipsRef.current = null;
+              animatingRef.current = true;
+              // Primary response always targets asstId
+              currentResponseIdRef.current = asstId;
 
-            requestAnimationFrame(tick);
+              const charsPerFrame = Math.max(2, Math.ceil(fullText.length / 90));
+              let pos = 0;
+
+              const tick = () => {
+                pos = Math.min(pos + charsPerFrame, fullText.length);
+                const partial = fullText.slice(0, pos);
+                const done = pos >= fullText.length;
+
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === asstId
+                      ? {
+                          ...m,
+                          content: partial,
+                          streaming: !done,
+                          ...(done && pendingChipsRef.current
+                            ? { follow_up_chips: pendingChipsRef.current }
+                            : {}),
+                        }
+                      : m
+                  )
+                );
+
+                if (!done) {
+                  requestAnimationFrame(tick);
+                } else {
+                  animatingRef.current = false;
+                }
+              };
+
+              requestAnimationFrame(tick);
+            }
           } else if (ev.type === "auto_referral_response") {
             // Auto-referral: add a new message bubble, fade agent cards
             const refText = ev.text as string;
