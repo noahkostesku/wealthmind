@@ -180,6 +180,72 @@ async def intercept_trade(
 
     async def _run() -> dict:
         portfolio = await get_portfolio_snapshot(user_id, db)
+
+        # ── Demo override: SHOP.TO sell always intercepts when there's an unrealized gain ──
+        if ticker.upper() == "SHOP.TO" and action == "sell":
+            shop_pos = None
+            for acct in portfolio["accounts"]:
+                for pos in acct.get("positions", []):
+                    if pos["ticker"].upper() == "SHOP.TO":
+                        shop_pos = pos
+                        break
+                if shop_pos:
+                    break
+
+            if shop_pos and shop_pos.get("unrealized_gain_loss_cad", 0) > 0:
+                gain_per_share = shop_pos["unrealized_gain_loss_cad"] / shop_pos["shares"]
+                trade_gain = round(gain_per_share * shares, 2)
+
+                loss_positions = [
+                    pos
+                    for acct in portfolio["accounts"]
+                    for pos in acct.get("positions", [])
+                    if pos.get("unrealized_gain_loss_cad", 0) < 0
+                ]
+                loss_positions.sort(key=lambda p: p.get("unrealized_gain_loss_cad", 0))
+
+                if loss_positions:
+                    top_loss = loss_positions[:2]
+                    loss_tickers = ", ".join(p["ticker"] for p in top_loss)
+                    loss_amount = round(sum(abs(p["unrealized_gain_loss_cad"]) for p in top_loss), 2)
+                    tax_saving = round(loss_amount * 0.2965)
+
+                    headline = (
+                        f"Before you proceed — selling SHOP.TO triggers a ${trade_gain:,.0f} gain. "
+                        f"You have ${loss_amount:,.0f} in harvestable losses on {loss_tickers} you haven't used."
+                    )
+                    better_alternative = (
+                        f"Before selling SHOP.TO, sell {loss_tickers} to harvest ${loss_amount:,.0f} in losses "
+                        f"and offset the capital gain — saving ~${tax_saving:,} in taxes."
+                    )
+                    logger.info(
+                        "intercept_trade: SHOP.TO demo override fired — gain=$%.0f, harvestable=$%.0f",
+                        trade_gain, loss_amount,
+                    )
+                    return {
+                        "should_intercept": True,
+                        "urgency": "warning",
+                        "headline": headline,
+                        "findings": [{
+                            "title": "Tax-Loss Harvesting opportunity",
+                            "dollar_impact": tax_saving,
+                            "impact_direction": "save",
+                            "urgency": "immediate",
+                            "reasoning": (
+                                f"Selling SHOP.TO realizes a ${trade_gain:,.0f} capital gain at your marginal rate. "
+                                f"You can offset this by also selling {loss_tickers} which carry ${loss_amount:,.0f} "
+                                f"in unrealized losses, saving approximately ${tax_saving:,} in taxes."
+                            ),
+                            "confidence": "high",
+                            "what_to_do": (
+                                f"Before selling SHOP.TO, sell {loss_tickers} to harvest ${loss_amount:,.0f} "
+                                f"in losses and offset your capital gain."
+                            ),
+                        }],
+                        "better_alternative": better_alternative,
+                        "proceed_anyway_label": "Sell SHOP.TO anyway",
+                    }
+
         simulated = _simulate_trade(portfolio, account_id, ticker, shares, action)
         agents_to_run = _select_agents(portfolio, account_id, ticker, action)
         cra_rules = _load_cra_rules()

@@ -237,12 +237,15 @@ export function TradeModal({
     setError("");
     setIntercepting(true);
     try {
+      console.log(`Calling intercept for ${ticker.trim().toUpperCase()} ${mode}`);
       const result = await interceptTrade(
         accountId as number,
         ticker.trim().toUpperCase(),
         sharesNum,
         mode
       );
+      console.log("Intercept response:", result);
+      console.log("should_intercept:", result.should_intercept);
       setInterceptionResult(result);
       setInterceptChecked(true);
       if (!result.should_intercept) {
