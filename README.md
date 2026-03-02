@@ -1,7 +1,7 @@
 # WealthMind
 
 <p align="center">
-  <img src="frontend/public/wealthmind.png" alt="WealthMind" width="200" />
+  <img src="frontend/public/wealthmind.png" alt="WealthMind"/>
 </p>
 
 **AI-powered financial intelligence for Canadian investors.**
