@@ -291,7 +291,12 @@ class PortfolioMonitor:
                 for acct in self._last_snapshot["accounts"]
                 for pos in acct.get("positions", [])
             }
-            for pos, _ in all_positions:
+            for pos, acct_type in all_positions:
+                # TLH is only relevant in non-registered accounts;
+                # registered accounts (RRSP, TFSA, FHSA, etc.) are tax-sheltered.
+                if acct_type != "non_registered":
+                    continue
+
                 ticker = pos["ticker"]
                 unrealized = pos.get("unrealized_gain_loss_cad", 0)
                 if unrealized >= -200:

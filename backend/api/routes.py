@@ -660,6 +660,8 @@ async def create_chat_session(db: AsyncSession = Depends(get_db)):
 class ChatMessageRequest(BaseModel):
     session_id: str
     message: str
+    current_page: str = ""
+    page_context: dict = {}
 
 
 @router.post("/chat/message")
@@ -696,7 +698,12 @@ async def chat_message(body: ChatMessageRequest, db: AsyncSession = Depends(get_
                 portfolio = await get_portfolio_snapshot(_DEMO_USER_ID, fresh_db)
 
             # ── 1. Route ──────────────────────────────────────────────────
-            routing = await conversation_router(body.message, history, last_findings)
+            routing = await conversation_router(
+                body.message, history, last_findings,
+                page_context=body.page_context or None,
+                current_page=body.current_page or None,
+                portfolio_snapshot=portfolio,
+            )
             agents_to_invoke = routing.get("agents_to_invoke") or []
             needs_web_search = routing.get("needs_web_search", False)
             web_search_query = routing.get("web_search_query") or ""
@@ -1162,6 +1169,128 @@ async def advisor_report(db: AsyncSession = Depends(get_db)):
     """
     from services.advisor import generate_advisor_report
     return await generate_advisor_report(_DEMO_USER_ID, db)
+
+
+# ===========================================================================
+# WELLY PAGE-AWARE ROUTES
+# ===========================================================================
+
+class WellyPageNoteRequest(BaseModel):
+    page: str
+    page_context: dict = {}
+    user_id: int | None = None
+
+
+@router.post("/welly/page-note")
+async def welly_page_note(req: WellyPageNoteRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Generate a short contextual note for the given page and context.
+    Uses claude-haiku-4-5 for speed. Returns { has_note: bool, note: str | null }.
+    Only fires if user has had at least one conversation. 3-second timeout.
+    """
+    import re
+    import anthropic
+
+    uid = req.user_id if req.user_id is not None else _DEMO_USER_ID
+
+    # Only fire if user has at least one conversation this session
+    conv_result = await db.execute(
+        select(Conversation)
+        .where(Conversation.user_id == uid)
+        .order_by(Conversation.updated_at.desc())
+        .limit(1)
+    )
+    conv = conv_result.scalar_one_or_none()
+    if conv is None:
+        return {"has_note": False, "note": None}
+
+    # Pull last_findings from most recent conversation for context
+    last_findings: dict = dict(conv.last_findings or {})
+    findings_snippets: list[str] = []
+    for domain, items in last_findings.items():
+        if domain == "greeting_data":
+            continue
+        if isinstance(items, list):
+            for finding in items[:1]:
+                title = finding.get("title", "")
+                impact = finding.get("dollar_impact", 0)
+                if title:
+                    findings_snippets.append(f"- {domain}: {title} (${impact:,.0f} impact)")
+
+    findings_context = "\n".join(findings_snippets) if findings_snippets else "none yet"
+
+    profile = json.loads((_DATA_DIR / "demo_profile.json").read_text())
+
+    page_labels: dict[str, str] = {
+        "/dashboard": "Dashboard overview",
+        "/portfolio": "Portfolio positions",
+        "/accounts": "Accounts",
+        "/markets": "Markets",
+        "/history": "Transaction history",
+    }
+    page_label = page_labels.get(req.page, req.page or "unknown page")
+    ctx_str = json.dumps(req.page_context) if req.page_context else "none"
+
+    # Pull key facts from profile for grounding
+    # accounts is a dict keyed by account name (e.g. "chequing", "rrsp_self_directed")
+    accounts: dict = profile.get("accounts", {})
+    fhsa_data = accounts.get("fhsa", {})
+    fhsa_open = fhsa_data.get("exists", False)
+    rrsp_data = accounts.get("rrsp_self_directed", {})
+    rrsp_room = rrsp_data.get("contribution_room_remaining", 0)
+    margin_data = accounts.get("margin", {})
+    margin_debit = margin_data.get("debit_balance", 0) or 0
+
+    prompt = f"""You are Welly, a financial AI for a Wealthsimple client.
+Client is viewing: {page_label}
+Additional context: {ctx_str}
+
+Key client facts (Premium tier, ~$142k CAD):
+- FHSA: {"OPENED" if fhsa_open else "NOT OPENED — eligible, $8k annual room"}
+- RRSP contribution room: ${rrsp_room:,.0f}
+- TFSA room: $7,000
+- Margin debit: ${margin_debit:,.0f} at 6.2% (${margin_debit * 0.062:,.0f}/yr cost)
+- Chequing: $18,400 at 2.5%
+
+Recent agent findings from conversation:
+{findings_context}
+
+Generate ONE concise insight for this specific page view (max 120 characters total).
+Rules:
+- Must be specific to what they're viewing or the context provided
+- Include one specific dollar figure where relevant
+- If page context has a focused_ticker, make the note about that specific ticker
+- If page context has focused_account, make it about that account type specifically — use findings above if they mention that account
+- If context is empty and page is /dashboard or /portfolio or /accounts, surface the highest-impact opportunity from findings
+- If there is truly no meaningful financial hook (e.g. context is empty and page has no actionable insight), return has_note: false
+- Keep the note under 120 characters
+
+Return ONLY this JSON — no other text:
+{{"has_note": true, "note": "short note here"}}
+or
+{{"has_note": false, "note": null}}"""
+
+    async def _call_claude() -> dict:
+        client = anthropic.AsyncAnthropic()
+        msg = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = msg.content[0].text.strip()
+        json_match = re.search(r"\{[^}]+\}", text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+        return {"has_note": False, "note": None}
+
+    try:
+        return await asyncio.wait_for(_call_claude(), timeout=3.0)
+    except asyncio.TimeoutError:
+        logger.warning("welly_page_note timed out after 3s")
+        return {"has_note": False, "note": None}
+    except Exception as exc:
+        logger.error("welly_page_note failed: %s", exc)
+        return {"has_note": False, "note": None}
 
 
 

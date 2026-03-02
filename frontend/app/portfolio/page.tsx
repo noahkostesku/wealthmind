@@ -19,6 +19,8 @@ import {
 import { getPositionHistory } from "@/lib/api";
 import { TradeModal } from "@/components/trading/TradeModal";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { usePageContext } from "@/lib/pageContext";
+import { WellyCallout } from "@/components/welly/WellyCallout";
 import type { Position, PositionHistory, Account } from "@/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -294,6 +296,7 @@ function PositionPanel({
 
 export default function PortfolioPage() {
   const { portfolio, loading } = usePortfolio();
+  const { setPageContext } = usePageContext();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [sortKey, setSortKey] = useState<SortKey>("current_value_cad");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -397,6 +400,9 @@ export default function PortfolioPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* Main content */}
         <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+          {/* ── Welly inline callout ────────────────────────────────────── */}
+          <WellyCallout />
+
           {/* Header */}
           <div>
             {loading ? (
@@ -514,11 +520,12 @@ export default function PortfolioPage() {
                         return (
                           <tr
                             key={`${pos.ticker}-${pos.account_id}`}
-                            onClick={() =>
-                              setSelectedPosition(
-                                isSelected ? null : pos
-                              )
-                            }
+                            onClick={() => {
+                              setSelectedPosition(isSelected ? null : pos);
+                              if (!isSelected) {
+                                setPageContext({ focused_ticker: pos.ticker });
+                              }
+                            }}
                             className={`border-b border-[#E5E5E5] cursor-pointer transition-colors ${
                               isSelected
                                 ? "bg-zinc-50"

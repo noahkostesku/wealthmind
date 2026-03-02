@@ -15,6 +15,8 @@ import {
 import { ArrowUpRight, ArrowDownRight, TrendingUp } from "lucide-react";
 import { getPerformance, getTransactionHistory } from "@/lib/api";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { usePageContext } from "@/lib/pageContext";
+import { WellyCallout } from "@/components/welly/WellyCallout";
 import type { Transaction, PerformanceData } from "@/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -109,7 +111,14 @@ function buildChartData(
 
 export default function DashboardPage() {
   const { portfolio, loading: portLoading } = usePortfolio();
+  const { setPageContext } = usePageContext();
   const [perf, setPerf] = useState<PerformanceData | null>(null);
+
+  // Register page context on mount
+  useEffect(() => {
+    setPageContext({});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [chartData, setChartData] = useState<{ date: string; value: number }[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [period, setPeriod] = useState<Period>("1mo");
@@ -211,6 +220,9 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      {/* ── Welly inline callout ────────────────────────────────────────────── */}
+      <WellyCallout />
 
       {/* ── Stat pills ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">

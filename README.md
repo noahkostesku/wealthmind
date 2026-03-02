@@ -1,5 +1,9 @@
 # WealthMind
 
+<p align="center">
+  <img src="frontend/public/wealthmind.png" alt="WealthMind" width="200" />
+</p>
+
 **AI-powered financial intelligence for Canadian investors.**
 
 WealthMind is a multi-agent system that monitors a client's full financial profile — TFSA, RRSP, FHSA, non-registered, margin, crypto, and chequing — and surfaces ranked, dollar-quantified insights in real time. Five specialist LLM agents run in parallel via LangGraph, each analyzing a different financial domain. A synthesis layer merges their findings into plain-language recommendations delivered through "Welly," a conversational AI interface.

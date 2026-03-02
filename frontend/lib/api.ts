@@ -1,4 +1,5 @@
 import { getSession } from "next-auth/react";
+import { getCurrentPageContextForApi } from "./pageContextStore";
 import type {
   PortfolioSnapshot,
   Account,
@@ -239,10 +240,16 @@ export async function streamChatMessage(
   onEvent: (event: { type: string } & Record<string, unknown>) => void
 ): Promise<void> {
   const headers = await authHeaders();
+  const { current_page, page_context } = getCurrentPageContextForApi();
   const res = await fetch(`${API_URL}/chat/message`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, message }),
+    body: JSON.stringify({
+      session_id: sessionId,
+      message,
+      current_page,
+      page_context,
+    }),
   });
   if (!res.ok) throw new Error(`Chat message failed: ${res.status}`);
   if (!res.body) throw new Error("No response body");

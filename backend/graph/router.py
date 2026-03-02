@@ -53,6 +53,9 @@ async def conversation_router(
     message: str,
     history: list[dict],
     last_findings: dict,
+    page_context: dict | None = None,
+    current_page: str | None = None,
+    portfolio_snapshot: dict | None = None,
 ) -> dict:
     """
     Route user message to appropriate domain agents.
@@ -80,14 +83,48 @@ async def conversation_router(
         if isinstance(findings, list) and findings:
             findings_summary[domain] = findings[:1]
 
-    user_content = json.dumps(
-        {
-            "user_message": message,
-            "conversation_history": recent_history,
-            "last_findings_summary": findings_summary,
-        },
-        indent=2,
-    )
+    payload: dict = {
+        "user_message": message,
+        "conversation_history": recent_history,
+        "last_findings_summary": findings_summary,
+    }
+    if current_page or page_context:
+        payload["page_context"] = {
+            "current_page": current_page or "",
+            **(page_context or {}),
+        }
+
+    if portfolio_snapshot:
+        # Compact live snapshot — always more accurate than last_findings_summary
+        payload["current_portfolio"] = {
+            "total_value_cad": portfolio_snapshot.get("total_value_cad"),
+            "total_gain_loss_cad": portfolio_snapshot.get("total_gain_loss_cad"),
+            "contribution_room": portfolio_snapshot.get("contribution_room"),
+            "margin": portfolio_snapshot.get("margin"),
+            "accounts": [
+                {
+                    "account_type": a["account_type"],
+                    "product_name": a.get("product_name", ""),
+                    "balance_cad": a.get("balance_cad"),
+                    "total_value_cad": a.get("total_value_cad"),
+                    "contribution_room_remaining": a.get("contribution_room_remaining"),
+                }
+                for a in portfolio_snapshot.get("accounts", [])
+            ],
+            "positions_summary": [
+                {
+                    "ticker": p["ticker"],
+                    "shares": p.get("shares"),
+                    "current_value_cad": p.get("current_value_cad"),
+                    "unrealized_gain_loss_cad": p.get("unrealized_gain_loss_cad"),
+                    "unrealized_gain_loss_pct": p.get("unrealized_gain_loss_pct"),
+                }
+                for acct in portfolio_snapshot.get("accounts", [])
+                for p in acct.get("positions", [])
+            ],
+        }
+
+    user_content = json.dumps(payload, indent=2)
 
     llm = ChatAnthropic(model=_MODEL, max_tokens=512)
 
@@ -108,6 +145,13 @@ async def conversation_router(
         if "reasoning" in result and "routing_reasoning" not in result:
             result["routing_reasoning"] = result.pop("reasoning")
         result["repeat_question"] = repeat_question
+        logger.info(
+            "[ROUTER] agents=%s | web_search=%s | can_answer=%s | reasoning=%s",
+            result.get("agents_to_invoke"),
+            result.get("needs_web_search"),
+            result.get("can_answer_from_context"),
+            result.get("routing_reasoning"),
+        )
         return result
     except Exception as exc:
         logger.error("Conversation router failed: %s", exc)

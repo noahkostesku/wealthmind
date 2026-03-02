@@ -3,42 +3,72 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { BotMessageSquare } from "lucide-react";
 import { Sidebar, MobileNav } from "./Sidebar";
 import { ChatPanel } from "./chat/ChatPanel";
 import { IntroScreen } from "./onboarding/IntroScreen";
 import { WellyIntro } from "./onboarding/WellyIntro";
 import type { WellyMessage } from "./onboarding/WellyIntro";
 import { PortfolioProvider } from "@/contexts/PortfolioContext";
+import { PageContextProvider } from "@/lib/pageContext";
+import { registerWellyControl } from "@/lib/pageContextStore";
 import { getOnboardedStatus, completeOnboarding, getMonitorAlerts } from "@/lib/api";
 import type { MonitorAlertData } from "@/types";
 import type { ReactNode } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const MONITOR_USER_ID = "1";
+const LS_PANEL_KEY = "welly_panel_expanded";
 
 const PUBLIC_PATHS = ["/login", "/"];
 const LS_KEY = "wm_onboarded";
 
-// Onboarding phase machine:
-//  "idle"    — not yet checked / returning user
-//  "intro"   — IntroScreen is visible
-//  "welly"   — IntroScreen dismissed, WellyIntro is running
-//  "done"    — onboarding complete, normal chat
 type OnboardPhase = "idle" | "intro" | "welly" | "done";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { data: session, status } = useSession();
-  const [wellyOpen, setWellyOpen] = useState(true);
 
+  // ── Panel state — persisted in localStorage ──────────────────────────────
+  const [wellyExpanded, setWellyExpandedState] = useState(true);
+  const [lsLoaded, setLsLoaded] = useState(false);
+
+  // Load from localStorage once on mount (client-side only)
+  useEffect(() => {
+    const stored = localStorage.getItem(LS_PANEL_KEY);
+    if (stored !== null) {
+      setWellyExpandedState(stored === "true");
+    }
+    setLsLoaded(true);
+  }, []);
+
+  function setWellyExpanded(val: boolean) {
+    setWellyExpandedState(val);
+    localStorage.setItem(LS_PANEL_KEY, String(val));
+  }
+
+  // ── Welly prefill (for WellyCallout → ChatPanel) ─────────────────────────
+  const [wellyPrefill, setWellyPrefill] = useState("");
+
+  // Register welly control functions so WellyCallout can call them
+  useEffect(() => {
+    registerWellyControl(
+      () => setWellyExpanded(true),
+      (text) => {
+        setWellyExpanded(true);
+        setWellyPrefill(text);
+      }
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Onboarding ────────────────────────────────────────────────────────────
   const [phase, setPhase] = useState<OnboardPhase>("idle");
   const [skipIntro, setSkipIntro] = useState(false);
   const [onboardingMessages, setOnboardingMessages] = useState<WellyMessage[]>([]);
   const [onboardingChips, setOnboardingChips] = useState<string[]>([]);
   const checkedRef = useRef(false);
 
-  // Monitor alert state
+  // ── Monitor alerts ────────────────────────────────────────────────────────
   const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlertData[]>([]);
   const [unreadAlertCount, setUnreadAlertCount] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
@@ -46,13 +76,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isPublic = PUBLIC_PATHS.includes(pathname);
   const isAuthenticated = !isPublic && status !== "loading" && !!session;
 
-  // ── Check onboarding status on auth ──────────────────────────────────────
+  // ── Check onboarding status ───────────────────────────────────────────────
   useEffect(() => {
     if (!isAuthenticated || checkedRef.current) return;
     checkedRef.current = true;
-
-    // DEV MODE: localStorage fast-path disabled — always show onboarding
-    // Re-enable for production: check localStorage.getItem(LS_KEY) === "true" first
 
     getOnboardedStatus()
       .then(({ onboarded }) => {
@@ -61,30 +88,27 @@ export function AppShell({ children }: { children: ReactNode }) {
           setPhase("done");
         } else {
           setPhase("intro");
-          setWellyOpen(true);
+          setWellyExpanded(true);
         }
       })
       .catch(() => {
-        setPhase("done"); // fail-safe: skip onboarding
+        setPhase("done");
       });
-  }, [isAuthenticated]);
+  }, [isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Monitor alerts: fetch on mount + WebSocket for real-time ─────────────
+  // ── Monitor alerts: fetch + WebSocket ────────────────────────────────────
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    // Fetch any pending alerts from the backend
     getMonitorAlerts()
       .then((alerts) => {
         if (alerts.length > 0) {
           setMonitorAlerts(alerts);
-          // Count only unsurfaced alerts as "unread" — all fetched ones count
           setUnreadAlertCount(alerts.length);
         }
       })
       .catch(() => null);
 
-    // Open WebSocket for real-time alerts
     const wsUrl = API_URL.replace(/^http/, "ws") + `/ws/monitor/${MONITOR_USER_ID}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
@@ -102,12 +126,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             created_at: data.created_at as string,
           };
           setMonitorAlerts((prev) => {
-            // Avoid duplicates
             if (prev.some((a) => a.id === alert.id)) return prev;
             return [...prev, alert];
           });
-          // Increment unread badge when panel is closed
-          if (!wellyOpen) {
+          // Increment unread badge when panel is collapsed
+          if (!wellyExpanded) {
             setUnreadAlertCount((n) => n + 1);
           }
         }
@@ -125,12 +148,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
-  // Clear unread count when Welly panel opens
+  // Clear unread count when panel expands
   useEffect(() => {
-    if (wellyOpen) setUnreadAlertCount(0);
-  }, [wellyOpen]);
+    if (wellyExpanded) setUnreadAlertCount(0);
+  }, [wellyExpanded]);
 
-  // ── IntroScreen dismissed ─────────────────────────────────────────────────
+  // ── Onboarding callbacks ──────────────────────────────────────────────────
   const handleIntroDismiss = useCallback(async (skipped: boolean) => {
     setSkipIntro(skipped);
     setPhase("welly");
@@ -142,7 +165,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     localStorage.setItem(LS_KEY, "true");
   }, []);
 
-  // ── WellyIntro message + chip injection ───────────────────────────────────
   const handleAddMessage = useCallback((msg: WellyMessage) => {
     setOnboardingMessages((prev) => [...prev, msg]);
   }, []);
@@ -159,82 +181,107 @@ export function AppShell({ children }: { children: ReactNode }) {
   const onboardingInProgress = phase === "intro" || phase === "welly";
 
   return (
-    <PortfolioProvider>
-      <div className="flex h-screen overflow-hidden bg-[#FAFAFA]">
+    <PageContextProvider>
+      <PortfolioProvider>
+        <div className="flex h-screen overflow-hidden bg-[#FAFAFA]">
 
-        {/* ── First-time intro overlay ──────────────────────────────────── */}
-        {phase === "intro" && (
-          <IntroScreen onDismiss={handleIntroDismiss} />
-        )}
+          {/* ── First-time intro overlay ─────────────────────────────────── */}
+          {phase === "intro" && (
+            <IntroScreen onDismiss={handleIntroDismiss} />
+          )}
 
-        {/* ── WellyIntro: side-effect component, feeds messages into chat ── */}
-        {phase === "welly" && (
-          <WellyIntro
-            skipped={skipIntro}
-            onAddMessage={handleAddMessage}
-            onSetChips={handleSetChips}
-          />
-        )}
+          {/* ── WellyIntro: feeds messages into chat ─────────────────────── */}
+          {phase === "welly" && (
+            <WellyIntro
+              skipped={skipIntro}
+              onAddMessage={handleAddMessage}
+              onSetChips={handleSetChips}
+            />
+          )}
 
-        {/* ── Left sidebar (desktop) ──────────────────────────────────── */}
-        <div className="hidden lg:flex flex-col w-56 fixed inset-y-0 left-0 z-30 flex-shrink-0">
-          <Sidebar wellyOpen={wellyOpen} onToggleWelly={() => setWellyOpen((o) => !o)} />
-        </div>
+          {/* ── Left sidebar (desktop) ───────────────────────────────────── */}
+          <div className="hidden lg:flex flex-col w-56 fixed inset-y-0 left-0 z-30 flex-shrink-0">
+            <Sidebar wellyOpen={wellyExpanded} onToggleWelly={() => setWellyExpanded(!wellyExpanded)} />
+          </div>
 
-        {/* ── Main content ────────────────────────────────────────────── */}
-        <main
-          className={`flex-1 overflow-y-auto lg:ml-56 pb-16 lg:pb-0 transition-all duration-300 ${
-            wellyOpen ? "lg:mr-96" : "lg:mr-0"
-          }`}
-        >
-          {children}
-        </main>
-
-        {/* ── Mobile backdrop ─────────────────────────────────────────── */}
-        {wellyOpen && (
-          <div
-            className="lg:hidden fixed inset-0 z-30 bg-black/40"
-            onClick={() => setWellyOpen(false)}
-          />
-        )}
-
-        {/* ── Welly panel ─────────────────────────────────────────────── */}
-        <div
-          className={`fixed inset-y-0 right-0 z-40 w-full sm:w-96 flex flex-col transition-transform duration-300 ease-in-out ${
-            wellyOpen ? "translate-x-0" : "translate-x-full"
-          }`}
-        >
-          <ChatPanel
-            onClose={() => setWellyOpen(false)}
-            onboardingMessages={onboardingMessages.length > 0 ? onboardingMessages : undefined}
-            onboardingChips={onboardingChips.length > 0 ? onboardingChips : undefined}
-            onboardingInProgress={onboardingInProgress}
-            monitorAlerts={monitorAlerts.length > 0 ? monitorAlerts : undefined}
-            unreadAlertCount={unreadAlertCount}
-          />
-        </div>
-
-        {/* ── Floating Welly button (when closed) ─────────────────────── */}
-        {!wellyOpen && (
-          <button
-            onClick={() => setWellyOpen(true)}
-            className="fixed bottom-20 lg:bottom-6 right-4 z-50 w-12 h-12 bg-[#111827] text-white rounded-full shadow-lg flex items-center justify-center hover:bg-zinc-700 transition-colors relative"
-            title="Open Welly"
+          {/* ── Main content ─────────────────────────────────────────────── */}
+          <main
+            className={`flex-1 overflow-y-auto lg:ml-56 pb-16 lg:pb-0 transition-all duration-200 ease-in-out ${
+              wellyExpanded ? "lg:mr-96" : "lg:mr-12"
+            }`}
           >
-            <BotMessageSquare className="w-5 h-5" />
-            {unreadAlertCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-white text-[10px] font-bold flex items-center justify-center leading-none ring-2 ring-white">
-                {unreadAlertCount > 9 ? "9+" : unreadAlertCount}
-              </span>
-            )}
-          </button>
-        )}
+            {children}
+          </main>
 
-        {/* ── Mobile bottom tab bar ─────────────────────────────────── */}
-        <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-[#E5E5E5]">
-          <MobileNav wellyOpen={wellyOpen} onToggleWelly={() => setWellyOpen((o) => !o)} />
+          {/* ── Mobile backdrop ──────────────────────────────────────────── */}
+          {wellyExpanded && (
+            <div
+              className="lg:hidden fixed inset-0 z-30 bg-black/40"
+              onClick={() => setWellyExpanded(false)}
+            />
+          )}
+
+          {/* ── Desktop collapsed strip (w-12) — shown when !wellyExpanded ─ */}
+          {/* Only rendered after localStorage has been read to avoid flash */}
+          {lsLoaded && (
+            <div
+              className={`hidden lg:flex fixed inset-y-0 right-0 z-50 w-12 flex-col items-center justify-center bg-white border-l border-[#E5E5E5] cursor-pointer transition-opacity duration-200 ${
+                wellyExpanded
+                  ? "opacity-0 pointer-events-none"
+                  : "opacity-100 pointer-events-auto"
+              }`}
+              onClick={() => setWellyExpanded(true)}
+              title="Open Welly"
+            >
+              <div className="relative">
+                <span className="w-7 h-7 rounded-full bg-[#16A34A] flex items-center justify-center ring-4 ring-[#16A34A]/20">
+                  <span className="w-2.5 h-2.5 rounded-full bg-white" />
+                </span>
+                {unreadAlertCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center leading-none ring-2 ring-white">
+                    {unreadAlertCount > 9 ? "9+" : unreadAlertCount}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Welly chat panel ─────────────────────────────────────────── */}
+          {/* Always mounted to preserve conversation state; hidden via CSS  */}
+          {/* Desktop: invisible+non-interactive when collapsed             */}
+          {/* Mobile: slides in/out as a drawer                             */}
+          {lsLoaded && (
+            <div
+              className={`fixed inset-y-0 right-0 z-40 w-full sm:w-96 flex flex-col transition-all duration-200 ease-in-out ${
+                wellyExpanded
+                  ? "translate-x-0"
+                  : "translate-x-full lg:translate-x-0 lg:invisible lg:pointer-events-none"
+              }`}
+            >
+              <ChatPanel
+                onClose={() => setWellyExpanded(false)}
+                onCollapse={() => setWellyExpanded(false)}
+                externalInput={wellyPrefill}
+                onExternalInputConsumed={() => setWellyPrefill("")}
+                onboardingMessages={onboardingMessages.length > 0 ? onboardingMessages : undefined}
+                onboardingChips={onboardingChips.length > 0 ? onboardingChips : undefined}
+                onboardingInProgress={onboardingInProgress}
+                monitorAlerts={monitorAlerts.length > 0 ? monitorAlerts : undefined}
+                unreadAlertCount={unreadAlertCount}
+                onBellClick={() => {
+                  setWellyExpanded(true);
+                  setUnreadAlertCount(0);
+                }}
+              />
+            </div>
+          )}
+
+          {/* ── Mobile bottom tab bar ────────────────────────────────────── */}
+          <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-[#E5E5E5]">
+            <MobileNav wellyOpen={wellyExpanded} onToggleWelly={() => setWellyExpanded(!wellyExpanded)} />
+          </div>
         </div>
-      </div>
-    </PortfolioProvider>
+      </PortfolioProvider>
+    </PageContextProvider>
   );
 }

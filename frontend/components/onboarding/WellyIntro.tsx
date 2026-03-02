@@ -45,7 +45,7 @@ export const AGENT_CAPABILITIES = [
 
 // ─── Default suggestion chips ────────────────────────────────────────────────
 
-const DEFAULT_CHIPS = [
+export const DEFAULT_CHIPS = [
   "What's my biggest tax risk right now?",
   "Should I pay down my margin or invest?",
   "What contribution room do I have left?",

@@ -13,6 +13,7 @@ import { Search, Star, StarOff, ArrowUpRight, ArrowDownRight } from "lucide-reac
 import { searchStocks, getQuote, getChart } from "@/lib/api";
 import { TradeModal } from "@/components/trading/TradeModal";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { usePageContext } from "@/lib/pageContext";
 import type { StockResult, PriceBar, Account } from "@/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -238,6 +239,7 @@ function StockDetail({
 
 export default function MarketsPage() {
   const { portfolio } = usePortfolio();
+  const { setPageContext } = usePageContext();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<StockResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -377,6 +379,7 @@ export default function MarketsPage() {
                   key={r.ticker}
                   onClick={() => {
                     setSelectedTicker(r.ticker);
+                    setPageContext({ searched_ticker: r.ticker });
                     setQuery("");
                     setResults([]);
                   }}
@@ -441,7 +444,10 @@ export default function MarketsPage() {
                 return (
                   <div
                     key={ticker}
-                    onClick={() => setSelectedTicker(ticker)}
+                    onClick={() => {
+                    setSelectedTicker(ticker);
+                    setPageContext({ searched_ticker: ticker });
+                  }}
                     className="px-5 py-3 flex items-center justify-between cursor-pointer hover:bg-zinc-50 transition-colors"
                   >
                     <div className="flex items-center gap-3">

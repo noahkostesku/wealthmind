@@ -20,6 +20,8 @@ import {
 import { ExchangeModal } from "@/components/trading/ExchangeModal";
 import { Modal } from "@/components/ui/modal";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { usePageContext } from "@/lib/pageContext";
+import { WellyCallout } from "@/components/welly/WellyCallout";
 import type { Account, AccountSummary } from "@/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -622,6 +624,7 @@ function AccountCard({
 
 export default function AccountsPage() {
   const { portfolio, loading } = usePortfolio();
+  const { setPageContext } = usePageContext();
   const [depositAccount, setDepositAccount] = useState<Account | null>(null);
   const [withdrawAccount, setWithdrawAccount] = useState<Account | null>(null);
   const [fhsaAccount, setFhsaAccount] = useState<Account | null>(null);
@@ -645,6 +648,9 @@ export default function AccountsPage() {
           {toast}
         </div>
       )}
+
+      {/* ── Welly inline callout ──────────────────────────────────────────── */}
+      <WellyCallout />
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -679,13 +685,20 @@ export default function AccountsPage() {
             <AccountCard
               key={account.id}
               account={account}
-              onDeposit={() =>
+              onDeposit={() => {
+                setPageContext({ focused_account: account.account_type });
                 account.account_type === "margin"
                   ? setPayDownAccount(account)
-                  : setDepositAccount(account)
-              }
-              onWithdraw={() => setWithdrawAccount(account)}
-              onOpenFHSA={() => setFhsaAccount(account)}
+                  : setDepositAccount(account);
+              }}
+              onWithdraw={() => {
+                setPageContext({ focused_account: account.account_type });
+                setWithdrawAccount(account);
+              }}
+              onOpenFHSA={() => {
+                setPageContext({ focused_account: "fhsa" });
+                setFhsaAccount(account);
+              }}
             />
           ))}
         </div>
